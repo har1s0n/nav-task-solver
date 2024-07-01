@@ -1,0 +1,5 @@
+add_subdirectory(GridGenerator)
+add_subdirectory(VisibilityCalculator)
+add_subdirectory(PDOPCalculator)
+add_subdirectory(NavigationSolver)
+add_subdirectory(Utils)
