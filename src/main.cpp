@@ -1,11 +1,10 @@
 #include <QCoreApplication>
 #include <QDebug>
 
-int main(int argc, char *argv[])
-{
-    QCoreApplication a(argc, argv);
+int main(int argc, char* argv[]) {
+   QCoreApplication a(argc, argv);
 
-    qDebug() << "test" << Qt::endl;
+   qDebug() << "test" << endl;
 
-    return a.exec();
+   return a.exec();
 }

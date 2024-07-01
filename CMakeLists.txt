@@ -9,7 +9,15 @@ set(CMAKE_AUTOUIC ON)
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 
-find_package(Qt6 COMPONENTS Core REQUIRED)
+# Попытка найти Qt6
+find_package(Qt6 COMPONENTS Core QUIET)
+
+if (NOT Qt6_FOUND)
+    find_package(Qt5 COMPONENTS Core REQUIRED)
+    set(QT_VERSION 5)
+else()
+    set(QT_VERSION 6)
+endif()
 
 add_subdirectory(src)
 add_subdirectory(tests)
@@ -19,10 +27,17 @@ include_directories(${CMAKE_SOURCE_DIR}/data)
 
 add_executable(nav-task-solver src/main.cpp)
 
-target_link_libraries(nav-task-solver
-    GridGenerator
-    Qt6::Core
-)
+if (QT_VERSION EQUAL 5)
+    target_link_libraries(nav-task-solver
+        GridGenerator
+        Qt5::Core
+    )
+else()
+    target_link_libraries(nav-task-solver
+        GridGenerator
+        Qt6::Core
+    )
+endif()
 
 include(GNUInstallDirs)
 

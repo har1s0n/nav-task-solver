@@ -1,24 +1,21 @@
-# include(FetchContent)
-# FetchContent_Declare(
-#   googletest
-#   URL https://github.com/google/googletest/archive/refs/tags/release-1.11.0.zip
-# )
-# # Для Windows: предотвратить установку тестов GoogleTest
-# set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
-# FetchContent_MakeAvailable(googletest)
+cmake_minimum_required(VERSION 3.14)
 
-# enable_testing()
+project(nav-task-solver-tests LANGUAGES CXX)
 
-# add_executable(
-#   nav-task-solver-tests
-#   test_main.cpp
-# )
+include(FetchContent)
+FetchContent_Declare(
+    googletest
+    URL https://github.com/google/googletest/archive/f8d7d77c06936315286eb55f8de22cd23c188571.zip
+)
 
-# target_link_libraries(
-#   nav-task-solver-tests
-#   GTest::gtest_main
-#   #GridGenerator
-# )
+FetchContent_MakeAvailable(googletest)
 
-# include(GoogleTest)
-# gtest_discover_tests(nav-task-solver-tests)
+include_directories(${CMAKE_SOURCE_DIR}/include)
+
+add_executable(test_GridGenerator test_GridGenerator.cpp)
+target_link_libraries(test_GridGenerator gtest_main GridGenerator)
+add_test(NAME test_GridGenerator COMMAND test_GridGenerator)
+
+#add_executable(test_class_b test_class_b.cpp)
+#target_link_libraries(test_class_b gtest_main)
+#add_test(NAME test_class_b COMMAND test_class_b)
