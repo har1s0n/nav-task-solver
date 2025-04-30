@@ -1,3 +1,5 @@
+add_subdirectory(app)
+add_subdirectory(modules)
 add_subdirectory(GridGenerator)
 add_subdirectory(VisibilityCalculator)
 add_subdirectory(PDOPCalculator)
