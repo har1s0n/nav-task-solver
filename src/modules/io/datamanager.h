@@ -3,14 +3,20 @@
 
 #include <QString>
 
+#include <inav/SP3>
+
 class DataManager {
 public:
 
-   DataManager();
+   bool                loadSP3(const QString& fullPath);
+   const sp3::SP3_FILE*getSP3File() const;
 
-   bool loadSp3(const QString& filePath);
-   bool loadRinexNav(const QString& filePath);
-   bool loadSBASCorrections(const QString& filePath);
+   bool                loadRinexNav(const QString& filePath);
+   bool                loadSBASCorrections(const QString& filePath);
+
+private:
+
+   std::unique_ptr<sp3::SP3_FILE> sp3File_;
 };
 
 #endif // DATAMANAGER_H

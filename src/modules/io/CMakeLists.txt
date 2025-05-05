@@ -3,9 +3,7 @@ include(${PROJECT_SOURCE_DIR}/inavFramework/import.cmake)
 message(STATUS "inavFramework_INCLUDE_DIRS = ${inavFramework_INCLUDE_DIRS}")
 
 add_library(IO
-    sp3reader.cpp
     datamanager.cpp
-    rinexnavreader.cpp
     sbascorrectionreader.cpp
 )
 

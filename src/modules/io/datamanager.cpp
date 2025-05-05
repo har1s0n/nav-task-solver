@@ -1,20 +1,32 @@
 #include "datamanager.h"
-#include "sp3reader.h"
-#include "rinexnavreader.h"
 #include "sbascorrectionreader.h"
 
-DataManager::DataManager() {}
+#include <QFileInfo>
 
-bool DataManager::loadSp3(const QString& filePath) {
-   SP3Reader sp3Reader;
 
-   return sp3Reader.read();
+bool DataManager::loadSP3(const QString& fullPath) {
+   QFileInfo sp3FileInfo(fullPath);
+
+   if (!sp3FileInfo.exists()) {
+      return false;
+   }
+   auto sp3File = std::make_unique<sp3::SP3_FILE>();
+
+   if (!sp3::Sp3Reader::parse(sp3FileInfo.path(), sp3FileInfo.fileName(), *sp3File)) {
+      return false;
+   }
+
+   sp3File_ = std::move(sp3File);
+
+   return true;
+}
+
+const sp3::SP3_FILE*DataManager::getSP3File() const {
+   return sp3File_.get();
 }
 
 bool DataManager::loadRinexNav(const QString& filePath) {
-   RinexNavReader rinexReader;
-
-   return rinexReader.read();
+   return true;
 }
 
 bool DataManager::loadSBASCorrections(const QString& filePath) {
