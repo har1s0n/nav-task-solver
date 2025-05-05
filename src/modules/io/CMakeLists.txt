@@ -2,10 +2,15 @@ include(${PROJECT_SOURCE_DIR}/inavFramework/import.cmake)
 
 message(STATUS "inavFramework_INCLUDE_DIRS = ${inavFramework_INCLUDE_DIRS}")
 
-add_library(IO
+set(public_headers
+    datamanager.h
+    sbascorrectionreader.h)
+set(sources
+    ${public_headers}
     datamanager.cpp
-    sbascorrectionreader.cpp
-)
+    sbascorrectionreader.cpp)
+
+add_library(IO ${sources})
 
 target_include_directories(IO
     PRIVATE
@@ -28,6 +33,8 @@ else()
             Qt6::Core
     )
 endif()
+
+message(STATUS "inavFramework_LIBRARIES = ${inavFramework_LIBRARIES}")
 
 
 install(TARGETS IO

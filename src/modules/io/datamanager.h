@@ -2,21 +2,24 @@
 #define DATAMANAGER_H
 
 #include <QString>
+#include <memory>
 
-#include <inav/SP3>
+#include <inav/Sp3>
+#include <inav/RINEX>
 
 class DataManager {
 public:
 
-   bool                loadSP3(const QString& fullPath);
-   const sp3::SP3_FILE*getSP3File() const;
-
-   bool                loadRinexNav(const QString& filePath);
-   bool                loadSBASCorrections(const QString& filePath);
+   bool                    loadSP3(const QString& fullPath);
+   const sp3::SP3_FILE*    getSP3File() const;
+   bool                    loadRinexNav(const QString& filePath);
+   const rinex::RINEX_FILE*getRinexFile()const;
+   bool                    loadSBASCorrections(const QString& filePath);
 
 private:
 
    std::unique_ptr<sp3::SP3_FILE> sp3File_;
+   std::unique_ptr<rinex::RINEX_FILE> rinexFile_;
 };
 
 #endif // DATAMANAGER_H

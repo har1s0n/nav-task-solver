@@ -1,9 +1,13 @@
 include(${PROJECT_SOURCE_DIR}/inavFramework/import.cmake)
 
-add_executable(nav-task-solver
-    main.cpp
+set(public_headers
+    application.h)
+set(sources
+    ${public_headers}
     application.cpp
-)
+    main.cpp)
+
+add_executable(nav-task-solver ${sources})
 
 target_include_directories(nav-task-solver
     PRIVATE

@@ -26,7 +26,24 @@ const sp3::SP3_FILE*DataManager::getSP3File() const {
 }
 
 bool DataManager::loadRinexNav(const QString& filePath) {
+   QFileInfo rinexFileInfo(filePath);
+
+   if (!rinexFileInfo.exists()) {
+      return false;
+   }
+   auto rinexFile = std::make_unique<rinex::RINEX_FILE>();
+
+   if (rinex::RinexReader::parse(rinexFileInfo.path(), rinexFileInfo.fileName(), *rinexFile) != rinex::PARSE_RESULT::SUCCESS) {
+      return false;
+   }
+
+   rinexFile_ = std::move(rinexFile);
+
    return true;
+}
+
+const rinex::RINEX_FILE*DataManager::getRinexFile() const {
+   return rinexFile_.get();
 }
 
 bool DataManager::loadSBASCorrections(const QString& filePath) {
