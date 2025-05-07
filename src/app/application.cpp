@@ -8,13 +8,16 @@ bool Application::initialize(const ApplicationConfig& config) {
       qCritical() << "Ошибка загрузки SP3";
       return false;
    }
-   auto test_1 = dataManager_.getSP3File();
 
    if (config_.rinexNavPath.isEmpty() || !dataManager_.loadRinexNav(config_.rinexNavPath)) {
       qCritical() << "Ошибка загрузки RINEX NAV";
       return false;
    }
-   auto test_2 = dataManager_.getRinexFile();
+
+   if (config_.sbasPath.isEmpty() || !dataManager_.loadSBASCorrections(config_.sbasPath, io::SourceType::FILE_CSV)) {
+      qCritical() << "SBAS (CSV) не загружен";
+      return false;
+   }
 
    return true;
 }

@@ -1,7 +1,8 @@
 #include "datamanager.h"
-#include "sbascorrectionreader.h"
 
 #include <QFileInfo>
+
+using namespace io;
 
 
 bool DataManager::loadSP3(const QString& fullPath) {
@@ -46,8 +47,10 @@ const rinex::RINEX_FILE*DataManager::getRinexFile() const {
    return rinexFile_.get();
 }
 
-bool DataManager::loadSBASCorrections(const QString& filePath) {
-   SBASCorrectionReader sbasReader;
+bool DataManager::loadSBASCorrections(const QString& path, SourceType sourceType) {
+   return sbasStore_.load(sourceType, path);
+}
 
-   return sbasReader.read();
+const SBASCorrectionStore &DataManager::getSBASStore() const {
+   return sbasStore_;
 }

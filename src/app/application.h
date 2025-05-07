@@ -6,7 +6,7 @@
 struct ApplicationConfig {
    QString sp3Path;
    QString rinexNavPath;
-   QString sisnetPath;
+   QString sbasPath;
 
    std::optional<QString> igsClockPath;
    std::optional<QString> rawObsPath;
@@ -31,7 +31,7 @@ private:
 
 private:
 
-   DataManager dataManager_;
+   io::DataManager dataManager_;
    ApplicationConfig config_;
 };
 

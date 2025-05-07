@@ -10,7 +10,7 @@ int main(int argc, char* argv[]) {
 
    config.sp3Path      = "/home/user/IAC23506.sp3.glo";
    config.rinexNavPath = "/home/user/mdvj0760.25g";
-   config.sisnetPath   = "data/sbas.dat";
+   config.sbasPath     = "data/sbas.dat";
 
    Application navApp;
 
