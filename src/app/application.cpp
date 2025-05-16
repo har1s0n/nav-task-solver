@@ -19,6 +19,10 @@ bool Application::initialize(const ApplicationConfig& config) {
       return false;
    }
 
+   const auto& sbas_store = dataManager_.getSBASStore();
+   auto test_sbas         = sbas_store.messages();
+
+
    return true;
 }
 

@@ -8,9 +8,9 @@ int main(int argc, char* argv[]) {
 
    ApplicationConfig config;
 
-   config.sp3Path      = "/home/user/IAC23506.sp3.glo";
-   config.rinexNavPath = "/home/user/mdvj0760.25g";
-   config.sbasPath     = "data/sbas.dat";
+   config.sp3Path      = "/Users/tarasovevgenij/Documents/24.04.25_test/Sta23634.sp3.glo";
+   config.rinexNavPath = "/Users/tarasovevgenij/Documents/24.04.25_test/GNSS00CMB_U_20251261311_15M_RN.rnx";
+   config.sbasPath     = "/Users/tarasovevgenij/Documents/24.04.25_test/data_test.csv";
 
    Application navApp;
 

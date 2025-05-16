@@ -13,6 +13,24 @@ enum class SourceType {
    DATABASE
 };
 
+struct LongTermCorrectionEntry {
+   Satellite satId;               // eg. "R01"
+   int       iode;
+   int       t0;                  // reference time [sec of day]
+   COORD_XYZ deltaPos;            // dx, dy, dz [m]
+   COORD_XYZ deltaVel;            // vx, vy, vz [m/s], may be zero
+   double    deltaAf0    = 0.0;
+   double    deltaAf1    = 0.0;
+   bool      hasVelocity = false; // true if derived from VELOCITY_CODE_1
+};
+
+struct PrnMaskInterval {
+   QDateTime          startDt;
+   QDateTime          endDt;
+   int                iodp;
+   QVector<Satellite> satList; // список PRN, которым разрешены долгосрочные поправки
+};
+
 class SBASCorrectionStore {
 public:
 
@@ -21,16 +39,27 @@ public:
                                                                                const QString& sourcePath);
    const QMap<sbas::MESSAGE_TYPE, QVector<std::shared_ptr<sbas::MSG> > > &messages() const;
    QVector<std::shared_ptr<sbas::MSG> >                                   getByType(sbas::MESSAGE_TYPE type) const;
+   std::optional<LongTermCorrectionEntry>                                 getLongTermCorrection(const Satellite& sat,
+                                                                                                const QDateTime& epoch) const;
 
 private:
 
-   bool loadFromFileHex(const QString& path);
-   bool loadFromCsvFile(const QString& path);
-   bool loadFromDatabase();
+   bool                     loadFromFileHex(const QString& path);
+   bool                     loadFromCsvFile(const QString& path);
+   bool                     loadFromDatabase();
+
+   void                     buildCorrectionIndex();
+   bool                     isPrnAllowed(const Satellite& sat,
+                                         const QDateTime& time) const;
+   std::optional<Satellite> resolveSatellite(int              iodp,
+                                             int              prnMaskNumber,
+                                             const QDateTime& recvTime) const;
 
 private:
 
    QMap<sbas::MESSAGE_TYPE, QVector<std::shared_ptr<sbas::MSG> > > parsedMessages_;
+   QMap<Satellite, QVector<LongTermCorrectionEntry> > correctionsBySat_;
+   QVector<PrnMaskInterval> prnMaskTimeline_;
    sbas::SbasParser parser_;
 };
 }
