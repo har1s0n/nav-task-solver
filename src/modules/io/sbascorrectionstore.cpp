@@ -1,5 +1,7 @@
 #include "sbascorrectionstore.h"
 
+#include <QDir>
+
 using namespace io;
 
 SBASCorrectionStore::SBASCorrectionStore() {}
@@ -90,7 +92,7 @@ bool SBASCorrectionStore::loadFromCsvFile(const QString& path) {
    QFile file(path);
 
    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
-      qWarning() << "Не удалось открыть CSV:" << path;
+      qWarning() << "Failed to open:" << path << ", error:" << file.errorString();
       return false;
    }
 
@@ -156,17 +158,12 @@ void SBASCorrectionStore::buildCorrectionIndex() {
                                 ? prnMaskMessages[i + 1]->recvTime
                                 : startTime.addSecs(600);
 
-      QVector<Satellite> sats;
+      PrnMaskInterval interval;
+      interval.startDt = startTime;
+      interval.endDt   = endTime;
+      interval.prnList = msg->satelites;
 
-      for (const auto& s : msg->satelites) {
-         if (s.systemSat == sbas::PURPOSE_SYSTEM::GLONASS) {
-            sats.append(Satellite(s.satId, SatelliteSystem::TYPE::GLONASS));
-         }
-      }
-
-      if (!sats.isEmpty()) {
-         prnMaskTimeline_.append({ startTime, endTime, msg->iodp, sats });
-      }
+      prnMaskTimeline_.append(std::move(interval));
    }
 
    const auto longtermMsgs = getByType(sbas::MESSAGE_TYPE::LONG_TERM_SATELLITE_ERROR_CORRECTIONS);
@@ -179,11 +176,10 @@ void SBASCorrectionStore::buildCorrectionIndex() {
       }
 
       QDateTime msgTime = msg->recvTime;
-      // int iodp          = msg->iodp; // предполагается, что это поле присутствует
 
       for (int i = 0; i < msg->satellites_code_1.size(); ++i) {
          const auto& code1               = msg->satellites_code_1[i];
-         std::optional<Satellite> optSat = resolveSatellite(code1.iodp, i + 1, msgTime);
+         std::optional<Satellite> optSat = resolveSatellite(i + 1, msgTime);
 
          if (!optSat) {
             continue;
@@ -198,7 +194,7 @@ void SBASCorrectionStore::buildCorrectionIndex() {
 
       for (int i = 0; i < msg->satellites_code_0.size(); ++i) {
          const auto& code0               = msg->satellites_code_0[i];
-         std::optional<Satellite> optSat = resolveSatellite(code0.iode, i + 1, msgTime);
+         std::optional<Satellite> optSat = resolveSatellite(i + 1, msgTime);
 
          if (!optSat) {
             continue;
@@ -214,21 +210,22 @@ void SBASCorrectionStore::buildCorrectionIndex() {
    }
 }
 
-bool SBASCorrectionStore::isPrnAllowed(const Satellite& sat, const QDateTime& time) const {
-   for (const auto& interval : prnMaskTimeline_) {
-      if ((time >= interval.startDt) && (time < interval.endDt) && interval.satList.contains(sat)) {
-         return true;
-      }
-   }
-   return false;
-}
+// bool SBASCorrectionStore::isPrnAllowed(const Satellite& sat, const QDateTime& time) const {
+//    for (const auto& interval : prnMaskTimeline_) {
+//       if ((time >= interval.startDt) && (time < interval.endDt) && interval.prnList.contains(sat.getNumber())) {
+//          return true;
+//       }
+//    }
+//    return false;
+// }
 
-std::optional<Satellite> SBASCorrectionStore::resolveSatellite(int iodp, int prnMaskNumber, const QDateTime& recvTime) const {
+std::optional<Satellite> SBASCorrectionStore::resolveSatellite(int prnMaskNumber, const QDateTime& recvTime) const {
    for (const auto& interval : prnMaskTimeline_) {
-      if ((interval.iodp == iodp) &&
-          (recvTime >= interval.startDt) && (recvTime < interval.endDt) &&
-          (prnMaskNumber >= 1) && (prnMaskNumber <= interval.satList.size())) {
-         return interval.satList[prnMaskNumber - 1];
+      if ((recvTime >= interval.startDt) && (recvTime < interval.endDt) &&
+          (prnMaskNumber >= 1) && (prnMaskNumber <= interval.prnList.size())) {
+         const auto& prn = interval.prnList[prnMaskNumber - 1];
+         auto typeGNSS   = prn.systemSat == sbas::PURPOSE_SYSTEM::GLONASS ? SatelliteSystem::TYPE::GLONASS : SatelliteSystem::TYPE::GPS;
+         return Satellite(prn.satId, typeGNSS);
       }
    }
    return std::nullopt;

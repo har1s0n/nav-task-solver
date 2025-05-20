@@ -1,1 +1,4 @@
-add_subdirectory(io)
+add_subdirectory(IO)
+add_subdirectory(CorrectionApplier)
+add_subdirectory(ErrorCalculator)
+add_subdirectory(NavigationSolver)

@@ -25,12 +25,10 @@ struct LongTermCorrectionEntry {
 };
 
 struct PrnMaskInterval {
-   QDateTime          startDt;
-   QDateTime          endDt;
-   int                iodp;
-   QVector<Satellite> satList; // список PRN, которым разрешены долгосрочные поправки
+   QDateTime                                 startDt;
+   QDateTime                                 endDt;
+   QVector<sbas::MSG_PRN_MASK::Satelite_PRN> prnList;
 };
-
 class SBASCorrectionStore {
 public:
 
@@ -51,8 +49,7 @@ private:
    void                     buildCorrectionIndex();
    bool                     isPrnAllowed(const Satellite& sat,
                                          const QDateTime& time) const;
-   std::optional<Satellite> resolveSatellite(int              iodp,
-                                             int              prnMaskNumber,
+   std::optional<Satellite> resolveSatellite(int              prnMaskNumber,
                                              const QDateTime& recvTime) const;
 
 private:
