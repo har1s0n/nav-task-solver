@@ -1,7 +1,7 @@
 #ifndef APPLICATION_H
 #define APPLICATION_H
 
-#include "modules/io/datamanager.h"
+#include "modules/IO/datamanager.h"
 
 struct ApplicationConfig {
    QString sp3Path;
