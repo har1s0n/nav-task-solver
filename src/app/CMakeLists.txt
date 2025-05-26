@@ -18,5 +18,6 @@ target_include_directories(nav-task-solver
 target_link_libraries(nav-task-solver
     PRIVATE
         IO
+        CorrectionApplier
         ${inavFramework_LIBRARIES}
 )

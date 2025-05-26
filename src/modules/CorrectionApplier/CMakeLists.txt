@@ -1,9 +1,11 @@
 include(${PROJECT_SOURCE_DIR}/inavFramework/import.cmake)
 
 set(public_headers
+    correctionapplier.h
     )
 set(sources
     ${public_headers}
+    correctionapplier.cpp
     )
 
 add_library(CorrectionApplier ${sources})

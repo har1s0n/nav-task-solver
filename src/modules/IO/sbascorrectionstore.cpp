@@ -39,10 +39,13 @@ std::optional<LongTermCorrectionEntry> SBASCorrectionStore::getLongTermCorrectio
    const LongTermCorrectionEntry* best = nullptr;
    int minTimeDiff                     = std::numeric_limits<int>::max();
 
-   int epochSec = QTime(0, 0).secsTo(epoch.time());
-
    for (const auto& entry : entries) {
-      int dt = std::abs(entry.t0 - epochSec);
+      QDateTime entryTime = QDateTime(epoch.date(), QTime(0, 0)).addSecs(entry.t0);
+
+      if (entryTime > epoch) {
+         continue;
+      }
+      int dt = std::abs(epoch.secsTo(entryTime));
 
       if ((dt <= MAX_TIME_DIFF_SECONDS) && (dt < minTimeDiff)) {
          minTimeDiff = dt;
@@ -52,6 +55,16 @@ std::optional<LongTermCorrectionEntry> SBASCorrectionStore::getLongTermCorrectio
 
    if (best) {
       return *best;
+   }
+   return std::nullopt;
+}
+
+std::optional<double> SBASCorrectionStore::getGpsMinusGlonassOffset(const QDateTime& epoch) const {
+   for (const auto& m:timeOffsets_) {
+      if ((epoch >= m.start) && (epoch < m.end)) {
+         qDebug() << "[SBASCorrectionStore] timeOffsets_ =" << m.timeCorrectionOffset;
+         return m.timeCorrectionOffset;
+      }
    }
    return std::nullopt;
 }
@@ -70,19 +83,35 @@ bool SBASCorrectionStore::loadFromFileHex(const QString& path) {
 
    while (!in.atEnd()) {
       const QString line = in.readLine().trimmed();
+      auto tokens        = line.split(' ');
 
-      if (line.isEmpty()) {
+      if (tokens.size() < 9) {
+         continue;
+      }
+      auto testDt = QString("%1-%2-%3 %4:%5:%6")
+                    .arg("20" + tokens[1])
+                    .arg(tokens[2])
+                    .arg(tokens[3])
+                    .arg(tokens[4])
+                    .arg(tokens[5])
+                    .arg(tokens[6]);
+      auto testRawHex    = tokens[8].trimmed();
+      QDateTime recvTime = QDateTime::fromString(testDt, "yyyy-MM-dd hh:mm:ss");
+
+      if (!recvTime.isValid()) {
          continue;
       }
 
       ++total;
-      auto result = parser_.parse(line);
+      auto result = parser_.parse(testRawHex);
 
       if ((result.msgStatus == sbas::PARSE_STATUS::OK) && result.msg) {
+         result.msg->recvTime = recvTime;
          parsedMessages_[result.msg->getTypeMsg()].append(result.msg);
          ++parsed;
       }
    }
+   buildCorrectionIndex();
    qDebug() << "[Hex] Прочитано:" << total << ", успешно:" << parsed;
 
    return parsed > 0;
@@ -179,7 +208,7 @@ void SBASCorrectionStore::buildCorrectionIndex() {
 
       for (int i = 0; i < msg->satellites_code_1.size(); ++i) {
          const auto& code1               = msg->satellites_code_1[i];
-         std::optional<Satellite> optSat = resolveSatellite(i + 1, msgTime);
+         std::optional<Satellite> optSat = resolveSatellite(code1.prn, msgTime);
 
          if (!optSat) {
             continue;
@@ -194,7 +223,7 @@ void SBASCorrectionStore::buildCorrectionIndex() {
 
       for (int i = 0; i < msg->satellites_code_0.size(); ++i) {
          const auto& code0               = msg->satellites_code_0[i];
-         std::optional<Satellite> optSat = resolveSatellite(i + 1, msgTime);
+         std::optional<Satellite> optSat = resolveSatellite(code0.prn, msgTime);
 
          if (!optSat) {
             continue;
@@ -202,27 +231,35 @@ void SBASCorrectionStore::buildCorrectionIndex() {
 
          const Satellite& sat = *optSat;
          LongTermCorrectionEntry entry{ sat, code0.iode,
-                                        msgTime.time().secsTo(QTime(0, 0)),
+                                        QTime(0, 0).secsTo(msgTime.time()),
                                         code0.deltaEcef, { 0.0, 0.0, 0.0 },
                                         code0.delta_a_f0, 0.0, false };
          correctionsBySat_[sat].append(entry);
       }
    }
-}
 
-// bool SBASCorrectionStore::isPrnAllowed(const Satellite& sat, const QDateTime& time) const {
-//    for (const auto& interval : prnMaskTimeline_) {
-//       if ((time >= interval.startDt) && (time < interval.endDt) && interval.prnList.contains(sat.getNumber())) {
-//          return true;
-//       }
-//    }
-//    return false;
-// }
+   const auto messages = getByType(sbas::MESSAGE_TYPE::NETWORK_OFFSET);
+
+   for (int i = 0; i < messages.size(); ++i) {
+      auto msg = std::dynamic_pointer_cast<sbas::MSG_NETWORK_OFFSET> (messages[i]);
+
+      if (!msg) {
+         continue;
+      }
+
+      QDateTime start = msg->recvTime;
+      QDateTime end   = (i + 1 < messages.size())
+                           ? messages[i + 1]->recvTime
+                           : start.addSecs(86400);
+
+      timeOffsets_.append({ start, end, msg->correctionOffset });
+   }
+}
 
 std::optional<Satellite> SBASCorrectionStore::resolveSatellite(int prnMaskNumber, const QDateTime& recvTime) const {
    for (const auto& interval : prnMaskTimeline_) {
       if ((recvTime >= interval.startDt) && (recvTime < interval.endDt) &&
-          (prnMaskNumber >= 1) && (prnMaskNumber <= interval.prnList.size())) {
+          (prnMaskNumber >= 1) /*&& (prnMaskNumber <= interval.prnList.size())*/) {
          const auto& prn = interval.prnList[prnMaskNumber - 1];
          auto typeGNSS   = prn.systemSat == sbas::PURPOSE_SYSTEM::GLONASS ? SatelliteSystem::TYPE::GLONASS : SatelliteSystem::TYPE::GPS;
          return Satellite(prn.satId, typeGNSS);

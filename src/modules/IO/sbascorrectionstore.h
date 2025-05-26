@@ -29,6 +29,13 @@ struct PrnMaskInterval {
    QDateTime                                 endDt;
    QVector<sbas::MSG_PRN_MASK::Satelite_PRN> prnList;
 };
+
+struct TimeOffsetInterval {
+   QDateTime start;
+   QDateTime end;
+   double    timeCorrectionOffset;
+};
+
 class SBASCorrectionStore {
 public:
 
@@ -39,6 +46,7 @@ public:
    QVector<std::shared_ptr<sbas::MSG> >                                   getByType(sbas::MESSAGE_TYPE type) const;
    std::optional<LongTermCorrectionEntry>                                 getLongTermCorrection(const Satellite& sat,
                                                                                                 const QDateTime& epoch) const;
+   std::optional<double>                                                  getGpsMinusGlonassOffset(const QDateTime& epoch)const;
 
 private:
 
@@ -57,6 +65,7 @@ private:
    QMap<sbas::MESSAGE_TYPE, QVector<std::shared_ptr<sbas::MSG> > > parsedMessages_;
    QMap<Satellite, QVector<LongTermCorrectionEntry> > correctionsBySat_;
    QVector<PrnMaskInterval> prnMaskTimeline_;
+   QVector<TimeOffsetInterval> timeOffsets_;
    sbas::SbasParser parser_;
 };
 }

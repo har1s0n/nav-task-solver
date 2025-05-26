@@ -1,4 +1,5 @@
 #include "application.h"
+#include "modules/CorrectionApplier/correctionapplier.h"
 
 
 bool Application::initialize(const ApplicationConfig& config) {
@@ -19,10 +20,6 @@ bool Application::initialize(const ApplicationConfig& config) {
       return false;
    }
 
-   const auto& sbas_store = dataManager_.getSBASStore();
-   auto test_sbas         = sbas_store.messages();
-
-
    return true;
 }
 
@@ -34,6 +31,9 @@ int Application::run() {
 }
 
 bool Application::applyCorrections() {
-   // применение поправок к RINEX
+   corrections::CorrectionApplier correctionApplier(dataManager_.getSBASStore());
+
+   correctionApplier.applySBASCorrections(*dataManager_.getRinexFile());
+
    return true;
 }

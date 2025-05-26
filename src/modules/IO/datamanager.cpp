@@ -22,7 +22,7 @@ bool DataManager::loadSP3(const QString& fullPath) {
    return true;
 }
 
-const sp3::SP3_FILE*DataManager::getSP3File() const {
+sp3::SP3_FILE*DataManager::getSP3File() {
    return sp3File_.get();
 }
 
@@ -43,7 +43,7 @@ bool DataManager::loadRinexNav(const QString& filePath) {
    return true;
 }
 
-const rinex::RINEX_FILE*DataManager::getRinexFile() const {
+rinex::RINEX_FILE*DataManager::getRinexFile() {
    return rinexFile_.get();
 }
 
