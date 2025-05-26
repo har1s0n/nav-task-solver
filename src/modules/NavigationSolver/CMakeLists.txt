@@ -1,3 +1,4 @@
 add_subdirectory(GridGenerator)
 add_subdirectory(SatelliteSelector)
+add_subdirectory(ErrorCalculator)
 add_subdirectory(NavigationTaskSolver)
