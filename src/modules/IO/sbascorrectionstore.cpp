@@ -62,7 +62,6 @@ std::optional<LongTermCorrectionEntry> SBASCorrectionStore::getLongTermCorrectio
 std::optional<double> SBASCorrectionStore::getGpsMinusGlonassOffset(const QDateTime& epoch) const {
    for (const auto& m:timeOffsets_) {
       if ((epoch >= m.start) && (epoch < m.end)) {
-         qDebug() << "[SBASCorrectionStore] timeOffsets_ =" << m.timeCorrectionOffset;
          return m.timeCorrectionOffset;
       }
    }

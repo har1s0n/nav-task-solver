@@ -51,20 +51,17 @@ bool corrections::CorrectionApplier::applyCorrectionToNavRecord(rinex::NAV_RECOR
 double corrections::CorrectionApplier::computeClockCorrection(const io::LongTermCorrectionEntry& correction,
                                                               const QDateTime&                   epoch,
                                                               bool                               isGlonass) {
-   int t_epoch       = QTime(0, 0).secsTo(epoch.time());
-   double deltaT_sec = t_epoch - correction.t0;
+   double t_epoch    = QTime(0, 0).secsTo(epoch.time());
+   double deltaT_sec = t_epoch - static_cast<double> (correction.t0);
 
    if (isGlonass) {
       auto gpsOffset = correctionStore_.getGpsMinusGlonassOffset(epoch);
 
-      if (gpsOffset.has_value()) {
-         qDebug() << "[SBAS] Δt_GPS−GLONASS =" << gpsOffset.value();
+      if (gpsOffset) {
+         qDebug() << "[SBAS] Δt_GPS−GLONASS =" << *gpsOffset;
+         deltaT_sec += *gpsOffset;
       } else {
          qDebug() << "[SBAS] Нет действующего смещения GPS−GLONASS на" << epoch;
-      }
-
-      if (gpsOffset.has_value()) {
-         deltaT_sec += (gpsOffset.value());
       }
    }
 
