@@ -1,42 +1,40 @@
-#include "GridGenerator.h"
-#include "data.h"
-#include <cmath>
+#include "gridgenerator.h"
 
+using namespace navsolver;
 
-std::vector<GridPoint> GridGenerator::generateGrid() {
-   std::vector<GridPoint> gridPoints;
+GridGenerator::GridGenerator(double lonStepDeg, ELLIPSOID::TYPE ellipsoid)
+   : lonStep_(lonStepDeg), ellipsoid_(ellipsoid) {}
 
-   for (double longitude = -180.0; longitude <= 180.0; longitude += 1.0) {
-      double latitudeStep = 1.0;
+QVector<GRID_POINT> GridGenerator::generateGrid(double minLat, double maxLat,
+                                                double minLon, double maxLon) const {
+   QVector<GRID_POINT> grid;
 
-      for (double latitude = 85.0; latitude >= -85.0; latitude -= latitudeStep) {
-         GridPoint gridPoint;
-         gridPoint.longitude = longitude;
-         gridPoint.latitude  = latitude;
-         gridPoint.height    = 0.0;
-         gridPoints.push_back(gridPoint);
+   constexpr double baseLatStep  = 1.0;
+   const double     referenceLat = minLat;
+
+   for (double lat = minLat; lat <= maxLat;) {
+      double cosLat          = qCos(qDegreesToRadians(lat));
+      double cosRef          = qCos(qDegreesToRadians(referenceLat));
+      double latStep         = baseLatStep;
+      double adjustedLonStep = lonStep_;
+
+      if (!qFuzzyCompare(cosLat, 0.0)) {
+         adjustedLonStep = lonStep_ / cosLat * cosRef;
       }
+
+      for (double lon = minLon; lon <= maxLon; lon += adjustedLonStep) {
+         COORD_LLH llh(lat, lon, 0.0);
+         COORD_XYZ xyz = Coordinates::convertLLH2XYZ(llh, ellipsoid_);
+         grid.append(GRID_POINT{ llh, xyz });
+      }
+
+      lat += latStep;
    }
-   return gridPoints;
+
+   return grid;
 }
 
-void GridGenerator::convertToLambertProjection(double longitude, double latitude, double& x, double& y) {
-   // Пример реализации преобразования координат в равноугловую проекцию Ламберта
-   double k0      = 0.9996;
-   double phi0    = 64.0 * PI / 180.0;
-   double lambda0 = 96.0 * PI / 180.0;
-   double phi     = latitude * PI / 180.0;
-   double lambda  = longitude * PI / 180.0;
-   double e       = sqrt(E2);
-   double n       = (1.0 - e * e * sin(phi) * sin(phi)) / (1.0 - e * e);
-   double F       = 0.5 * (1.0 + n * sin(phi) * (1.0 + n / 4.0 * pow(sin(phi), 3)));
-   double M       = A *
-                    ((1.0 - e * e / 4.0 - 3.0 * e * e * e * e / 64.0) * phi - (3.0 * e / 2.0 - 27.0 * e * e * e / 32.0) * sin(phi) * cos(
-                        phi) +
-                     (21.0 * e * e / 16.0 - 55.0 * e * e * e * e / 32.0) * sin(2 * phi) * cos(2 * phi));
-   double xi  = M / (k0 * F);
-   double eta = n * (lambda - lambda0) * cos(phi);
-
-   x = xi * sin(eta) + 500000.0;
-   y = -xi* cos(eta) + 3000000.0;
+bool GridGenerator::execute(pipeline::Context& ctx) {
+   ctx.gridPoints = std::move(generateGrid());
+   return true;
 }

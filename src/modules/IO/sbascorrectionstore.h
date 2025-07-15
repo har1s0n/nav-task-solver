@@ -27,36 +27,33 @@ struct LongTermCorrectionEntry {
 struct PrnMaskInterval {
    QDateTime                                 startDt;
    QDateTime                                 endDt;
-   QVector<sbas::MSG_PRN_MASK::Satelite_PRN> prnList;
+   QVector<sbas::MSG_PRN_MASK::Satelite_PRN> prns;
 };
 
 struct TimeOffsetInterval {
    QDateTime start;
    QDateTime end;
-   double    timeCorrectionOffset;
+   double    timeCorrectionOffset = 0.0;
 };
 
 class SBASCorrectionStore {
 public:
 
-   SBASCorrectionStore();
+   SBASCorrectionStore() = default;
    bool                                                                   load(SourceType     type,
-                                                                               const QString& sourcePath);
+                                                                               const QString& path);
    const QMap<sbas::MESSAGE_TYPE, QVector<std::shared_ptr<sbas::MSG> > > &messages() const;
    QVector<std::shared_ptr<sbas::MSG> >                                   getByType(sbas::MESSAGE_TYPE type) const;
    std::optional<LongTermCorrectionEntry>                                 getLongTermCorrection(const Satellite& sat,
                                                                                                 const QDateTime& epoch) const;
-   std::optional<double>                                                  getGpsMinusGlonassOffset(const QDateTime& epoch)const;
+   std::optional<double>                                                  gpsGlonassOffset(const QDateTime& epoch)const;
 
 private:
 
-   bool                     loadFromFileHex(const QString& path);
-   bool                     loadFromCsvFile(const QString& path);
-   bool                     loadFromDatabase();
-
+   bool                     loadHex(const QString& path);
+   bool                     loadCsv(const QString& path);
+   bool                     loadDb();
    void                     buildCorrectionIndex();
-   bool                     isPrnAllowed(const Satellite& sat,
-                                         const QDateTime& time) const;
    std::optional<Satellite> resolveSatellite(int              prnMaskNumber,
                                              const QDateTime& recvTime) const;
 

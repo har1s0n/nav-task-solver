@@ -1,9 +1,11 @@
 include(${PROJECT_SOURCE_DIR}/inavFramework/import.cmake)
 
 set(public_headers
+    satelliteselector.h
     )
 set(sources
     ${public_headers}
+    satelliteselector.cpp
     )
 
 add_library(SatelliteSelector ${sources})

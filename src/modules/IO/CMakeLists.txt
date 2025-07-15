@@ -3,13 +3,18 @@ include(${PROJECT_SOURCE_DIR}/inavFramework/import.cmake)
 message(STATUS "inavFramework_INCLUDE_DIRS = ${inavFramework_INCLUDE_DIRS}")
 
 set(public_headers
-    datamanager.h)
+    datamanager.h
+    sbascorrectionstore.h
+    dcbparser.h
+)
 set(sources
     ${public_headers}
-    datamanager.cpp)
+    datamanager.cpp
+    sbascorrectionstore.cpp
+    dcbparser.cpp
+)
 
-add_library(IO ${sources}
-    sbascorrectionstore.h sbascorrectionstore.cpp)
+add_library(IO ${sources})
 
 target_include_directories(IO
     PRIVATE

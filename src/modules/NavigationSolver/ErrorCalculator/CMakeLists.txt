@@ -6,7 +6,8 @@ set(sources
     ${public_headers}
     )
 
-add_library(ErrorCalculator ${sources})
+add_library(ErrorCalculator ${sources}
+    errorcalculator.h errorcalculator.cpp)
 
 target_include_directories(ErrorCalculator
     PRIVATE

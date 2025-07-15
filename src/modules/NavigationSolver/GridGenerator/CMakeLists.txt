@@ -1,9 +1,11 @@
 include(${PROJECT_SOURCE_DIR}/inavFramework/import.cmake)
 
 set(public_headers
+    gridgenerator.h
     )
 set(sources
     ${public_headers}
+    gridgenerator.cpp
     )
 
 add_library(GridGenerator ${sources})

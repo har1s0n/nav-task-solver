@@ -19,5 +19,7 @@ target_link_libraries(nav-task-solver
     PRIVATE
         IO
         CorrectionApplier
+        SatelliteSelector
+        GridGenerator
         ${inavFramework_LIBRARIES}
 )

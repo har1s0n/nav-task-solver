@@ -4,19 +4,23 @@
 
 using namespace io;
 
-SBASCorrectionStore::SBASCorrectionStore() {}
+bool SBASCorrectionStore::load(SourceType type, const QString& path) {
+   parsedMessages_.clear();
+   correctionsBySat_.clear();
+   timeOffsets_.clear();
 
-bool SBASCorrectionStore::load(SourceType type, const QString& sourcePath) {
+   bool ok = false;
+
    switch (type) {
-     case SourceType::FILE_HEX:
-        return loadFromFileHex(sourcePath);
-     case SourceType::FILE_CSV:
-        return loadFromCsvFile(sourcePath);
-     case SourceType::DATABASE:
-        return loadFromDatabase();
-     default:
-        return false;
+     case SourceType::FILE_HEX: ok = loadHex(path); break;
+     case SourceType::FILE_CSV: ok = loadCsv(path); break;
+     case SourceType::DATABASE: ok = loadDb();     break;
    }
+
+   if (ok) {
+      buildCorrectionIndex();
+   }
+   return ok;
 }
 
 const QMap<sbas::MESSAGE_TYPE, QVector<std::shared_ptr<sbas::MSG> > > &SBASCorrectionStore::messages() const {
@@ -59,7 +63,7 @@ std::optional<LongTermCorrectionEntry> SBASCorrectionStore::getLongTermCorrectio
    return std::nullopt;
 }
 
-std::optional<double> SBASCorrectionStore::getGpsMinusGlonassOffset(const QDateTime& epoch) const {
+std::optional<double> SBASCorrectionStore::gpsGlonassOffset(const QDateTime& epoch) const {
    for (const auto& m:timeOffsets_) {
       if ((epoch >= m.start) && (epoch < m.end)) {
          return m.timeCorrectionOffset;
@@ -68,7 +72,7 @@ std::optional<double> SBASCorrectionStore::getGpsMinusGlonassOffset(const QDateT
    return std::nullopt;
 }
 
-bool SBASCorrectionStore::loadFromFileHex(const QString& path) {
+bool SBASCorrectionStore::loadHex(const QString& path) {
    QFile file(path);
 
    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
@@ -110,13 +114,12 @@ bool SBASCorrectionStore::loadFromFileHex(const QString& path) {
          ++parsed;
       }
    }
-   buildCorrectionIndex();
    qDebug() << "[Hex] Прочитано:" << total << ", успешно:" << parsed;
 
    return parsed > 0;
 }
 
-bool SBASCorrectionStore::loadFromCsvFile(const QString& path) {
+bool SBASCorrectionStore::loadCsv(const QString& path) {
    QFile file(path);
 
    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
@@ -153,14 +156,13 @@ bool SBASCorrectionStore::loadFromCsvFile(const QString& path) {
          ++parsed;
       }
    }
-   buildCorrectionIndex();
 
    qDebug() << "[CSV] Прочитано:" << total << ", успешно:" << parsed;
 
    return parsed > 0;
 }
 
-bool SBASCorrectionStore::loadFromDatabase() {
+bool SBASCorrectionStore::loadDb() {
    qInfo() << "[Заглушка] SBASCorrectionStore::loadFromDatabaseStub";
    parsedMessages_.clear();
    auto testMsg = std::make_shared<sbas::MSG_TESTING>();
@@ -189,7 +191,7 @@ void SBASCorrectionStore::buildCorrectionIndex() {
       PrnMaskInterval interval;
       interval.startDt = startTime;
       interval.endDt   = endTime;
-      interval.prnList = msg->satelites;
+      interval.prns    = msg->satelites;
 
       prnMaskTimeline_.append(std::move(interval));
    }
@@ -259,7 +261,7 @@ std::optional<Satellite> SBASCorrectionStore::resolveSatellite(int prnMaskNumber
    for (const auto& interval : prnMaskTimeline_) {
       if ((recvTime >= interval.startDt) && (recvTime < interval.endDt) &&
           (prnMaskNumber >= 1) /*&& (prnMaskNumber <= interval.prnList.size())*/) {
-         const auto& prn = interval.prnList[prnMaskNumber - 1];
+         const auto& prn = interval.prns[prnMaskNumber - 1];
          auto typeGNSS   = prn.systemSat == sbas::PURPOSE_SYSTEM::GLONASS ? SatelliteSystem::TYPE::GLONASS : SatelliteSystem::TYPE::GPS;
          return Satellite(prn.satId, typeGNSS);
       }
