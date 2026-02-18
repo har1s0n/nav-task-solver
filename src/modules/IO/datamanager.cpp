@@ -20,10 +20,10 @@ bool DataManager::execute(pipeline::Context& ctx) {
       return false;
    }
 
-   // if (!loadSBASCorrections(cfg_.sbasPath, cfg_.sbasSourceType)) {
-   //    qCritical() << name() << ": не удалось загрузить SBAS:" << cfg_.sbasPath;
-   //    return false;
-   // }
+   if (!loadSBASCorrections(cfg_.sbasPath, cfg_.sbasSourceType)) {
+      qCritical() << name() << ": не удалось загрузить SBAS:" << cfg_.sbasPath;
+      return false;
+   }
 
    if (!loadDCB(cfg_.dcbPath)) {
       qCritical() << name() << ": не удалось загрузить DCB:" << cfg_.dcbPath;
@@ -98,6 +98,10 @@ bool DataManager::loadSBASCorrections(const QString& path, SourceType sourceType
 }
 
 const SBASCorrectionStore &DataManager::getSBASStore() const noexcept {
+   return sbasStore_;
+}
+
+SBASCorrectionStore &DataManager::sbasStore() noexcept{
    return sbasStore_;
 }
 

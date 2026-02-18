@@ -10,9 +10,12 @@ add_library(ErrorCalculator ${sources}
     errorcalculator.h errorcalculator.cpp)
 
 target_include_directories(ErrorCalculator
-    PRIVATE
-        ${PROJECT_SOURCE_DIR}/src
-        ${inavFramework_INCLUDE_DIRS}
+    PUBLIC
+        $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/src/modules/NavigationSolver/ErrorCalculator>
+        $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/src>
+        $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/inavFramework>
+        $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/inavFramework/include>
+        $<INSTALL_INTERFACE:include>
 )
 
 if (QT_VERSION EQUAL 5)

@@ -1,7 +1,6 @@
 #ifndef APPLICATION_H
 #define APPLICATION_H
 
-// #include "modules/IModule/imodule.h"
 #include "modules/IO/datamanager.h"
 
 struct ApplicationConfig {

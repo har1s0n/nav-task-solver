@@ -17,9 +17,13 @@ set(sources
 add_library(IO ${sources})
 
 target_include_directories(IO
-    PRIVATE
-        ${PROJECT_SOURCE_DIR}/src
-        ${inavFramework_INCLUDE_DIRS}
+  PUBLIC
+    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/src/modules/IO>
+    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/inavFramework>
+    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/inavFramework/include>
+    $<INSTALL_INTERFACE:include>  # на будущее (при install)
+  PRIVATE
+    ${PROJECT_SOURCE_DIR}/src     # если где-то внутри .cpp вы инклюдите через "modules/.."
 )
 
 if (QT_VERSION EQUAL 5)

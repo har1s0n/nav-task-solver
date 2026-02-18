@@ -1,5 +1,6 @@
 #include "application.h"
 #include "modules/CorrectionApplier/correctionapplier.h"
+#include "modules/NavigationSolver/ErrorCalculator/errorcalculator.h"
 #include "modules/NavigationSolver/GridGenerator/gridgenerator.h"
 #include "modules/NavigationSolver/SatelliteSelector/satelliteselector.h"
 
@@ -15,6 +16,7 @@ bool Application::initialize(const ApplicationConfig& config) {
       io::SourceType::FILE_CSV,
       cfg_.dcbPath
    };
+
    modules_.push_back(std::make_unique<io::DataManager> (ioCfg));
 
    // Шаг 2: применение SBAS-поправок (если включено)
@@ -27,6 +29,9 @@ bool Application::initialize(const ApplicationConfig& config) {
 
    // Шаг 4: модуль отбора видимых спутников
    modules_.push_back(std::make_unique<navsolver::SatelliteSelector>());
+
+   // Шаг 5: модуль расчета остаточной ошибки СДКМ
+   modules_.push_back(std::make_unique<navsolver::ErrorCalculator>());
 
    return true;
 }
@@ -60,27 +65,10 @@ int Application::run() {
             qDebug() << "[Application] Извлечено эпох для фильтрации:" << ctx.allowedEpochs.size();
          }
       }
+      qDebug() << "=== Завершение работы модуля:" << module->name();
    }
 
-   qDebug() << "[Application] Пайплайн завершён.";
-   qDebug() << "[Application] Общее число видимых спутников:" << ctx.visibleSats.size();
-
-   // qDebug() << "Пайплайн завершён, найдено спутников:" << ctx.visibleSats.size();
-   // return 0;
-   // 1. Генерация сетки
-   // navsolver::GridGenerator gridGen;
-   // auto gridPoints = gridGen.generateGrid();
-
-   // 2. Извлечение эпох из скорректированного RINEX
-   // auto epochs = extractEpochs(corrected_.get());
-
-   // 3. Определение видимых спутников
-   // navsolver::SatelliteSelector selector(dataManager_);
-   // auto visibleSats = selector.selectVisibleSatellites(gridPoints, epochs, 5.0);
-
-   // 4. [Следующий шаг] Расчёт проекционных ошибок в ErrorCalculator
-   // navsolver::ErrorCalculator calc;
-   // auto residuals = calc.computeResidualErrors(dataManager_, correctedRinex_, gridPoints, visibleSats);
+   qDebug() << "[Application] Пайплайн завершён";
 
 
    return 0;

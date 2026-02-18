@@ -36,6 +36,7 @@ public:
    const sp3::SP3_FILE*       getSP3File()const noexcept;
    const rinex::RINEX_FILE*   getRinexFile()const noexcept;
    const SBASCorrectionStore &getSBASStore() const noexcept;
+   io::SBASCorrectionStore &  sbasStore() noexcept;
    std::optional<double>      getGlonassL3MinusL1Bias(const Satellite& satId) const noexcept;
 
 private:

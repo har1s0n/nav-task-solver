@@ -20,10 +20,19 @@ public:
                                     double maxLat = 82.0,
                                     double minLon = 19.0,
                                     double maxLon = 170.0) const;
+
+   QVector<GRID_POINT> generateGridLAEA(double minLat = 41.0,
+                                        double maxLat = 82.0,
+                                        double minLon = 19.0,
+                                        double maxLon = 170.0,
+                                        double stepKm = 100) const;
    bool    execute(pipeline::Context& ctx) override;
    QString name()   const override {
       return QStringLiteral("Генерация сетки");
    }
+
+   static bool saveGridToCsv(const QString&             filePath,
+                             const QVector<GRID_POINT>& grid);
 
 private:
 

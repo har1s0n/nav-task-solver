@@ -11,9 +11,12 @@ set(sources
 add_library(CorrectionApplier ${sources})
 
 target_include_directories(CorrectionApplier
-    PRIVATE
-        ${PROJECT_SOURCE_DIR}/src
-        ${inavFramework_INCLUDE_DIRS}
+    PUBLIC
+      $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/src/modules/CorrectionApplier>
+      $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/src>                   # если где-то инклюдишь через "modules/..."
+      $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/inavFramework>
+      $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/inavFramework/include>
+      $<INSTALL_INTERFACE:include>
 )
 
 if (QT_VERSION EQUAL 5)
@@ -22,6 +25,7 @@ if (QT_VERSION EQUAL 5)
             ${inavFramework_LIBRARIES}
         PUBLIC
             Qt5::Core
+            IO
     )
 else()
     target_link_libraries(CorrectionApplier
@@ -29,6 +33,7 @@ else()
             ${inavFramework_LIBRARIES}
         PUBLIC
             Qt6::Core
+            IO
     )
 endif()
 

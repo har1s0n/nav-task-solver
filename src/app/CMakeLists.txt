@@ -21,5 +21,6 @@ target_link_libraries(nav-task-solver
         CorrectionApplier
         SatelliteSelector
         GridGenerator
+        ErrorCalculator
         ${inavFramework_LIBRARIES}
 )
