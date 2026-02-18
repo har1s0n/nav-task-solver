@@ -1,0 +1,30 @@
+function(nav_add_gtest TARGET_NAME)
+  set(options)
+  set(oneValueArgs FOLDER)
+  set(multiValueArgs SRCS LIBS DATA_DIRS)
+  cmake_parse_arguments(NAVTEST "${options}" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
+
+  add_executable(${TARGET_NAME} ${NAVTEST_SRCS})
+
+  # Всегда линкуем GoogleTest и QtCore (у вас часто QString/QDateTime)
+  target_link_libraries(${TARGET_NAME}
+    PRIVATE
+      GTest::gtest GTest::gtest_main
+      Qt6::Core
+      test_common          # наша общая библиотека из tests/common
+      ${NAVTEST_LIBS}      # модуль(и) проекта, например IO, Corrections
+  )
+
+  # Для удобства — путь к данным теста
+  foreach(dir IN LISTS NAVTEST_DATA_DIRS)
+    target_compile_definitions(${TARGET_NAME}
+      PRIVATE TEST_DATA_DIR_${dir}="${CMAKE_CURRENT_SOURCE_DIR}/${dir}")
+  endforeach()
+
+  # Автоматически регистрируем в CTest
+  add_test(NAME ${TARGET_NAME} COMMAND ${TARGET_NAME})
+
+  if(NAVTEST_FOLDER)
+    set_target_properties(${TARGET_NAME} PROPERTIES FOLDER ${NAVTEST_FOLDER})
+  endif()
+endfunction()
