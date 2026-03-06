@@ -2,12 +2,11 @@
 #define IMODULE_H
 
 #include <QString>
-#include <memory>
 
 #include <inav/Coordinates>
 
 namespace io   { class DataManager; }
-namespace rinex { class RINEX_FILE; }
+namespace rinex { struct RINEX_FILE; }
 
 using VisibleSatellites = QMap<QDateTime, QMap<GRID_POINT, QVector<Satellite> > >;
 
@@ -18,15 +17,36 @@ struct ResidualError {
    double    residual  = 0.0; ///< остаточная ошибка СДКМ
 };
 
+struct DOP {
+   double PDOP = qQNaN();
+   double HDOP = qQNaN();
+   double VDOP = qQNaN();
+   double GDOP = qQNaN();
+};
+
+struct NavSolution {
+   COORD_XYZ delta_pos_ecef{ 0.0, 0.0, 0.0 }; // δX,δY,δZ в той же линейной шкале, что и H/y
+   double    delta_clk_s = qQNaN();           // δt (сек), если cδt в метрах
+
+   DOP    dop{};
+   int    num_sats    = 0;
+   double postfit_rms = qQNaN();
+   bool   converged   = false;
+
+   // требуемые метрики (по δpos)
+   double err3d     = qQNaN();
+   double horiz_err = qQNaN();
+   double vert_err  = qQNaN();
+};
+
 namespace pipeline {
 struct Context {
-   io::DataManager*                                            dm      = nullptr;
-   const rinex::RINEX_FILE*                                    navOrig = nullptr;
-   std::unique_ptr<rinex::RINEX_FILE>                          navCorrected;
+   io::DataManager*                                            dm = nullptr;
    QVector<GRID_POINT>                                         gridPoints;
    QVector<QDateTime>                                          allowedEpochs;
    VisibleSatellites                                           visibleSats;
    QMap<QDateTime, QMap<GRID_POINT, QVector<ResidualError> > > residualErrors;
+   QMap<QDateTime, QMap<GRID_POINT, NavSolution> >             solutions;
 };
 
 class IModule {

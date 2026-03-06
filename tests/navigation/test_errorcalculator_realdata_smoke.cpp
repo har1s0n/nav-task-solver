@@ -3,11 +3,9 @@
 #include <QtCore/QDateTime>
 
 #include "modules/IO/datamanager.h"
-#include "modules/CorrectionApplier/correctionapplier.h"
 #include "errorcalculator.h"
 
 using io::DataManager;
-using corrections::CorrectionApplier;
 using navsolver::ErrorCalculator;
 
 static QString p(const QString& rel) {

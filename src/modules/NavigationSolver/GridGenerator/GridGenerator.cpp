@@ -198,9 +198,9 @@ QVector<GRID_POINT> GridGenerator::generateGridLAEA(double minLat,
 }
 
 bool GridGenerator::execute(pipeline::Context& ctx) {
-   // ctx.gridPoints = std::move(generateGrid());
-   ctx.gridPoints = std::move(generateGridLAEA());
-   // saveGridToCsv("/Users/tarasovevgenij/Documents/24.04.25_test/grid_points_LAEA_FROM_QT.csv", ctx.gridPoints);
+   ctx.gridPoints = std::move(generateGrid());
+   // ctx.gridPoints = std::move(generateGridLAEA());
+   saveGridToCsv("/Users/tarasovevgenij/Documents/24.04.25_test/grid_points_LAEA_FROM_QT.csv", ctx.gridPoints);
 
    return true;
 }

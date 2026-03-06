@@ -2,7 +2,7 @@
 #include <gtest/gtest.h>
 
 #define private public
-#include "sbascorrectionstore.h"
+#include "modules/IO/sbascorrectionstore.h"
 #undef private
 
 #include <inav/SBAS>

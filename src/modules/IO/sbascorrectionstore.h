@@ -20,6 +20,10 @@ struct PrnMaskInterval {
    QDateTime end; // [start,end)
    // соответствие локального индекса из маски (1..210) → Satellite
    QHash<int, Satellite> mapLocalIdxToSat;
+
+   // Упорядоченный список номеров ПСП (1..210), для которых в данной PRN mask стоит «1».
+   // Порядок соответствует перечислению в сообщениях, где используется PRN Mask Number (1..51).
+   QVector<int> activePspsOrdered;
 };
 
 // ---------------- UDRE/FAST/DEG ----------------
@@ -37,7 +41,10 @@ struct FastEntry {
    QDateTime start, end;
    int       iodf{ -1 };
    int       iodp{ -1 };
+   double    prc_m{ qQNaN() }; // FAST PRC (м) из типов 2..5/24
+   bool      doNotUse{ false };
 };
+
 struct DegrParams { QDateTime start, end; double a{ 0.0 }; int updateInterval_s{ 0 }; };
 
 // ---------------- IONO (18/26) ----------------
@@ -61,7 +68,6 @@ struct IonoObs {
 };
 
 // ---------------- LONG-TERM (тип 25 и long-term часть типа 24) ----------------
-// Структура — совместима с ожиданиями CorrectionApplier
 struct LongTermCorrectionEntry {
    QDateTime start, end;          // интервал актуальности [start,end)
    int       iodp{ -1 };
@@ -104,6 +110,12 @@ public:
    std::optional<Satellite> resolveByLocalIndex(int              localIdx,
                                                 const QDateTime& t) const;
 
+   // PRN Mask Number (1..51) → Satellite через активную PRN Mask.
+   // В ИКД СДКМ поля satNum/prn в сообщениях типов 2–7, 24, 25 — это именно PRN Mask Number,
+   // а не номер ПСП (1..210) и не PRN в смысле GPS.
+   std::optional<Satellite> resolveByMaskNumber(int              prnMaskNumber,
+                                                const QDateTime& t) const;
+
    // ---- UDRE ----
    std::optional<double> udreSigma_m2(const Satellite& sat,
                                       const QDateTime& t) const;
@@ -121,6 +133,8 @@ public:
                                      const QDateTime& t) const;
    std::optional<int>       fastIodp(const Satellite& sat,
                                      const QDateTime& t) const;
+   std::optional<double>    fastPrc_m(const Satellite& sat,
+                                      const QDateTime& t) const;
    std::optional<QDateTime> fastLastUpdate(const Satellite& sat,
                                            const QDateTime& t) const;
 
@@ -195,6 +209,20 @@ private:
       d = normLonRad(d);
       return std::fabs(d);
    }
+
+   struct ActiveNode {
+      double lat_rad, lon_rad;
+      int    band, iodi, idPoint;
+   };
+   // Формирует единую глобальную сетку активных узлов на заданную эпоху
+   QVector<ActiveNode> getActiveGrid(const QDateTime& t) const;
+
+   // Ищет окружающие узлы по глобальной сетке (независимо от границ Bands)
+   int                 findCellCorners(const QVector<ActiveNode>& grid,
+                                       const QDateTime&           t,
+                                       double                     ippLat,
+                                       double                     ippLon,
+                                       QVector<IonoObs>&          outCorners) const;
 
    const IonoBandSnapshot*pickBandSnapshot(double           ippLat,
                                            double           ippLon,

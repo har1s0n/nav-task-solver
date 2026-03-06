@@ -1,4 +1,5 @@
-include(${PROJECT_SOURCE_DIR}/inavFramework/import.cmake)
+#include(${PROJECT_SOURCE_DIR}/inavFramework/import.cmake)ƒ
+include(${INAV_FRAMEWORK_PATH}/import.cmake)
 
 set(public_headers
     imodule.h
@@ -7,12 +8,15 @@ set(sources
     ${public_headers}
     )
 
-add_library(IModule ${sources})
+add_library(IModule OBJECT ${sources})
 
 target_include_directories(IModule
-    PRIVATE
-        ${PROJECT_SOURCE_DIR}/src
-        ${inavFramework_INCLUDE_DIRS}
+  PUBLIC
+    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/src/modules/IO>
+    ${inavFramework_INCLUDE_DIRS}
+    $<INSTALL_INTERFACE:include>
+  PRIVATE
+    ${PROJECT_SOURCE_DIR}/src
 )
 
 if (QT_VERSION EQUAL 5)

@@ -43,6 +43,9 @@ private:
 
    bool fileExists(const QString& path) const noexcept;
 
+   void applyLeapSecondShiftToSP3(sp3::SP3_FILE& sp3,
+                                  int            leapSeconds = 18);
+
 private:
 
    Config cfg_;

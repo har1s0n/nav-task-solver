@@ -40,6 +40,7 @@ VisibleSatellites navsolver::SatelliteSelector::selectVisibleSatellites(
          for (auto itSat = epochRecords.constBegin(); itSat != epochRecords.constEnd(); ++itSat) {
             const Satellite& sat      = itSat.key();
             const COORD_XYZ& satCoord = itSat.value().coord;
+
             COORD_XYZ sp3CoordM;
             sp3CoordM.x = satCoord.x * 1000.0;
             sp3CoordM.y = satCoord.y * 1000.0;

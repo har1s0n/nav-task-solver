@@ -4,7 +4,6 @@
 
 #define private public
 #include "errorcalculator.h"
-#include "modules/CorrectionApplier/correctionapplier.h"
 #undef private
 
 #include "modules/IO/datamanager.h"

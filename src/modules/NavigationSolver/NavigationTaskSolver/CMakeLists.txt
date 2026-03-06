@@ -1,17 +1,28 @@
-include(${PROJECT_SOURCE_DIR}/inavFramework/import.cmake)
+include(${INAV_FRAMEWORK_PATH}/import.cmake)
 
 set(public_headers
+    geometry.h
+    weights.h
+    solver.h
+    navigationtasksolver.h
     )
 set(sources
     ${public_headers}
+    geometry.cpp
+    weights.cpp
+    solver.cpp
+    navigationtasksolver.cpp
     )
 
-add_library(NavigationTaskSolver ${sources})
+add_library(NavigationTaskSolver OBJECT ${sources})
 
 target_include_directories(NavigationTaskSolver
-    PRIVATE
-        ${PROJECT_SOURCE_DIR}/src
-        ${inavFramework_INCLUDE_DIRS}
+  PUBLIC
+    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/src/modules/IO>
+    ${inavFramework_INCLUDE_DIRS}
+    $<INSTALL_INTERFACE:include>
+  PRIVATE
+    ${PROJECT_SOURCE_DIR}/src
 )
 
 if (QT_VERSION EQUAL 5)

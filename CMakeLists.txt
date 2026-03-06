@@ -21,6 +21,38 @@ else()
     set(QT_VERSION 6)
 endif()
 
+# 1. Если путь не был передан явно через командную строку (-DINAV_FRAMEWORK_PATH=...)
+if(NOT DEFINED INAV_FRAMEWORK_PATH)
+    # Задаем список возможных расположений фреймворка (от наиболее вероятных к запасным)
+    set(SEARCH_PATHS
+        "${PROJECT_SOURCE_DIR}/../../../../../inavFramework" # 1. Интеграция внутри проекта ПОЭХ
+        "${PROJECT_SOURCE_DIR}/inavFramework"                 # 2. Локальная папка (для standalone разработки)
+        "${PROJECT_SOURCE_DIR}/../inavFramework"              # 3. Фреймворк лежит рядом с проектом
+    )
+
+    # Ищем первый существующий путь
+    foreach(path IN LISTS SEARCH_PATHS)
+        # Нормализуем путь (превращаем "../../.." в красивый абсолютный путь)
+        get_filename_component(abs_path "${path}" ABSOLUTE)
+
+        # Проверяем наличие целевого файла
+        if(EXISTS "${abs_path}/import.cmake")
+            set(INAV_FRAMEWORK_PATH "${abs_path}" CACHE PATH "Path to inavFramework" FORCE)
+            message(STATUS "Auto-detected inavFramework at: ${INAV_FRAMEWORK_PATH}")
+            break()
+        endif()
+    endforeach()
+endif()
+
+# 2. Строгая проверка перед подключением (защита от невнятных ошибок)
+if(NOT EXISTS "${INAV_FRAMEWORK_PATH}/import.cmake")
+    message(FATAL_ERROR "inavFramework/import.cmake not found! \
+    Checked standard paths. Please set INAV_FRAMEWORK_PATH explicitly.")
+endif()
+
+# 3. Подключаем фреймворк
+include("${INAV_FRAMEWORK_PATH}/import.cmake")
+
 add_subdirectory(src)
 add_subdirectory(tests)
 
@@ -34,20 +66,4 @@ configure_package_config_file(
     "${CMAKE_CURRENT_SOURCE_DIR}/cmake/nav-task-solver-config.cmake.in"
     "${CMAKE_CURRENT_BINARY_DIR}/nav-task-solver-config.cmake"
     INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/nav-task-solver
-)
-
-install(FILES
-    "${CMAKE_CURRENT_BINARY_DIR}/nav-task-solver-config.cmake"
-    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/nav-task-solver
-)
-
-install(EXPORT nav-task-solver-targets
-    FILE nav-task-solver-targets.cmake
-    NAMESPACE nav-task-solver::
-    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/nav-task-solver
-)
-
-export(EXPORT nav-task-solver-targets
-    FILE "${CMAKE_CURRENT_BINARY_DIR}/nav-task-solver-targets.cmake"
-    NAMESPACE nav-task-solver::
 )

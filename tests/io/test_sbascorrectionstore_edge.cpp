@@ -2,7 +2,7 @@
 
 // Даём тестовый доступ к приватным полям (только в этом TU)
 #define private public
-#include "sbascorrectionstore.h"
+#include "modules/IO/sbascorrectionstore.h"
 #undef private
 
 #include <inav/SBAS>

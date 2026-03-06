@@ -39,6 +39,134 @@ bool DataManager::fileExists(const QString& path) const noexcept {
    return info.exists() && info.isFile();
 }
 
+static double lagrangeInterpolate(const QVector<double>& x, const QVector<double>& y, double xi) {
+   double result = 0.0;
+   int    n      = x.size();
+
+   for (int i = 0; i < n; i++) {
+      double term = y[i];
+
+      for (int j = 0; j < n; j++) {
+         if (j != i) {
+            term = term * (xi - x[j]) / (x[i] - x[j]);
+         }
+      }
+      result += term;
+   }
+   return result;
+}
+
+void DataManager::applyLeapSecondShiftToSP3(sp3::SP3_FILE& sp3, int leapSeconds) {
+   if (sp3.records.isEmpty()) {
+      return;
+   }
+
+   sp3::SP3_FILE shiftedSp3 = sp3;
+   shiftedSp3.records.clear();
+
+   auto epochs = sp3.records.keys();
+   std::sort(epochs.begin(), epochs.end());
+
+   // Используем окно в 10 точек для полинома 9-й степени (стандарт для SP3)
+   const int N_POINTS = 10;
+
+   for (const QDateTime& currentEpoch : epochs) {
+      // Искомое время в шкале GPS (на leapSeconds впереди UTC)
+      QDateTime targetGpsTime = currentEpoch.addSecs(leapSeconds);
+
+      // Ищем окно из N_POINTS ближайших эпох
+      int bestIdx    = 0;
+      double minDiff = std::numeric_limits<double>::max();
+
+      for (int i = 0; i <= epochs.size() - N_POINTS; ++i) {
+         double diff = std::abs(epochs[i + N_POINTS / 2].secsTo(targetGpsTime));
+
+         if (diff < minDiff) {
+            minDiff = diff;
+            bestIdx = i;
+         }
+      }
+
+      int startIdx = std::max(0, bestIdx);
+      int pts      = std::min(N_POINTS, (int)epochs.size());
+
+      QMap<Satellite, sp3::SP3_RECORD> newEpochRecords;
+
+      // Проходим по всем спутникам в текущую эпоху
+      for (const Satellite& sat : sp3.records[currentEpoch].keys()) {
+         QVector<QDateTime> satTimes;
+         QVector<COORD_XYZ> satCoords;
+
+         // Собираем валидные узлы интерполяции для конкретного НКА
+         for (int i = startIdx; i < startIdx + pts; ++i) {
+            if (sp3.records[epochs[i]].contains(sat)) {
+               satTimes.push_back(epochs[i]);
+               satCoords.push_back(sp3.records[epochs[i]][sat].coord);
+            }
+         }
+
+         // Если недостаточно точек для интерполяции, оставляем как есть
+         if (satTimes.size() < 2) {
+            newEpochRecords.insert(sat, sp3.records[currentEpoch][sat]);
+            continue;
+         }
+
+         int n = satTimes.size();
+         QVector<double> oldIntervals;
+         QVector<double> coordX, coordY, coordZ;
+         oldIntervals.reserve(n);
+         coordX.reserve(n);
+         coordY.reserve(n);
+         coordZ.reserve(n);
+
+         double t0         = satTimes.first().toMSecsSinceEpoch() / 1000.0;
+         double targetTime = (targetGpsTime.toMSecsSinceEpoch() / 1000.0) - t0;
+
+         for (int i = 0; i < n; ++i) {
+            oldIntervals.push_back((satTimes[i].toMSecsSinceEpoch() / 1000.0) - t0);
+            coordX.push_back(satCoords[i].x);
+            coordY.push_back(satCoords[i].y);
+            coordZ.push_back(satCoords[i].z);
+         }
+
+         sp3::SP3_RECORD newRec = sp3.records[currentEpoch][sat];
+
+         // Интерполируем координаты напрямую
+         newRec.coord.x = lagrangeInterpolate(oldIntervals, coordX, targetTime);
+         newRec.coord.y = lagrangeInterpolate(oldIntervals, coordY, targetTime);
+         newRec.coord.z = lagrangeInterpolate(oldIntervals, coordZ, targetTime);
+
+         // ===================================================================
+         // ВРЕМЕННАЯ МЕТРИКА: ДЕТЕКТОР ОСЦИЛЛЯЦИЙ (Феномен Рунге)
+         // ===================================================================
+         const COORD_XYZ& origCoord = sp3.records[currentEpoch][sat].coord;
+         double dx                  = newRec.coord.x - origCoord.x;
+         double dy                  = newRec.coord.y - origCoord.y;
+         double dz                  = newRec.coord.z - origCoord.z;
+
+         // SP3 координаты обычно хранятся в километрах.
+         double shiftDistanceKm = std::sqrt(dx * dx + dy * dy + dz * dz);
+
+         // Ожидаемый сдвиг: ~3.5 км/с * 18 сек = ~63 км.
+         // Жесткий допуск: от 40 км до 90 км (с учетом проекций и эллиптичности).
+         if ((shiftDistanceKm > 90.0) || (shiftDistanceKm < 40.0)) {
+            qWarning().noquote() << QString("[LeapSecond] ВНИМАНИЕ: Возможная осцилляция! %1 эпоха %2. "
+                                            "Сдвиг: %3 км (ожидалось ~63 км).")
+               .arg(sat.toString())
+               .arg(currentEpoch.toString(Qt::ISODate))
+               .arg(shiftDistanceKm, 0, 'f', 2);
+         }
+         // ===================================================================
+
+         newEpochRecords.insert(sat, newRec);
+      }
+
+      shiftedSp3.records.insert(currentEpoch, newEpochRecords);
+   }
+
+   sp3 = shiftedSp3;
+}
+
 bool DataManager::loadSP3(const QString& path) {
    if (!fileExists(path)) {
       qWarning() << "SP3 file not found:" << path;
@@ -53,6 +181,10 @@ bool DataManager::loadSP3(const QString& path) {
       qWarning() << "Failed to parse SP3:" << path;
       return false;
    }
+   // приводим sp3 эфемериды к UTS(SU) (сдвигая на leapSecond)
+   applyLeapSecondShiftToSP3(*sp3File, 18);
+   qInfo() << "[DataManager] SP3-координаты успешно сдвинуты на +18 сек (Leap Second) через полином Лагранжа";
+
    sp3File_ = std::move(sp3File);
 
    return true;

@@ -9,6 +9,10 @@ namespace navsolver {
 /**
  * Модуль генерации географической сетки.
  * Возвращает массив точек GridPoint (LLH + ECEF) и сохраняет его в Context.
+ * базовый сценарий: double minLat = 41.0;
+ *                   double maxLat = 82.0;
+ *                   double minLon = 19.0;
+ *                   double maxLon = 170.0
  */
 class GridGenerator : public pipeline::IModule  {
 public:
@@ -16,15 +20,15 @@ public:
    explicit GridGenerator(double          lonStepDeg = 1.0,
                           ELLIPSOID::TYPE ellipsoid  = ELLIPSOID::TYPE::PZ90_11);
 
-   QVector<GRID_POINT> generateGrid(double minLat = 41.0,
-                                    double maxLat = 82.0,
-                                    double minLon = 19.0,
-                                    double maxLon = 170.0) const;
+   QVector<GRID_POINT> generateGrid(double minLat = 61.0348,
+                                    double maxLat = 61.0348,
+                                    double minLon = 69.0651,
+                                    double maxLon = 69.0651) const;
 
-   QVector<GRID_POINT> generateGridLAEA(double minLat = 41.0,
-                                        double maxLat = 82.0,
-                                        double minLon = 19.0,
-                                        double maxLon = 170.0,
+   QVector<GRID_POINT> generateGridLAEA(double minLat = 57.0,
+                                        double maxLat = 61.0,
+                                        double minLon = 73.0,
+                                        double maxLon = 100.0,
                                         double stepKm = 100) const;
    bool    execute(pipeline::Context& ctx) override;
    QString name()   const override {

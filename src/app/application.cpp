@@ -1,8 +1,11 @@
 #include "application.h"
-#include "modules/CorrectionApplier/correctionapplier.h"
 #include "modules/NavigationSolver/ErrorCalculator/errorcalculator.h"
 #include "modules/NavigationSolver/GridGenerator/gridgenerator.h"
 #include "modules/NavigationSolver/SatelliteSelector/satelliteselector.h"
+#include "modules/NavigationSolver/NavigationTaskSolver/navigationtasksolver.h"
+
+#include <QJsonArray>
+#include <QJsonObject>
 
 
 bool Application::initialize(const ApplicationConfig& config) {
@@ -16,65 +19,134 @@ bool Application::initialize(const ApplicationConfig& config) {
       io::SourceType::FILE_CSV,
       cfg_.dcbPath
    };
-
+   modules_.clear();
    modules_.push_back(std::make_unique<io::DataManager> (ioCfg));
 
-   // Шаг 2: применение SBAS-поправок (если включено)
-   if (cfg_.applyCorrections) {
-      modules_.push_back(std::make_unique<corrections::CorrectionApplier>());
-   }
-
-   // Шаг 3: модуль генерации сетки
+   // 2) Генерация сетки
    modules_.push_back(std::make_unique<navsolver::GridGenerator>());
 
-   // Шаг 4: модуль отбора видимых спутников
+   // 3) Отбор видимых спутников (по allowedEpochs)
    modules_.push_back(std::make_unique<navsolver::SatelliteSelector>());
 
-   // Шаг 5: модуль расчета остаточной ошибки СДКМ
+   // 4) Расчёт Δρ_abs (deltaSp3) и Δρ_sbas (deltaSdcm)
    modules_.push_back(std::make_unique<navsolver::ErrorCalculator>());
+
+   // 5) Решение навигационной задачи и метрики
+   modules_.push_back(std::make_unique<navsolver::NavigationTaskSolver>());
 
    return true;
 }
 
 int Application::run() {
-   pipeline::Context ctx;
+   bool epochsPrepared = false;
 
    for (auto& module : modules_) {
       qDebug() << "=== Запускаем модуль:" << module->name();
 
-      if (!module->execute(ctx)) {
+      if (!module->execute(ctx_)) {
          qWarning() << "Модуль" << module->name() << "завершился с ошибкой";
          return -1;
       }
 
-      // После генерации сетки и перед SatelliteSelector заполняем ctx.epochs
-      if (module->name() == QStringLiteral("Генерация сетки")) {
-         // Берём RINEX из ctx: скорректированный (если есть) или оригинал
-         const auto navPtr =
-            ctx.navCorrected ? ctx.navCorrected.get() : ctx.navOrig;
+      if (!epochsPrepared) {
+         const auto* navPtr = (ctx_.dm ? ctx_.dm->getRinexFile() : nullptr);
+         const auto* sp3Ptr = (ctx_.dm ? ctx_.dm->getSP3File() : nullptr);
 
-         if (!navPtr) {
-            qWarning() << "[Application] NAV-файл отсутствует";
-            return -1;
-         }
-         ctx.allowedEpochs = extractEpochs(navPtr);
+         if (navPtr && sp3Ptr) {
+            const auto epochsSp3 = extractEpochs(sp3Ptr);
+            const auto epochsNav = extractEpochs(navPtr);
 
-         if (ctx.allowedEpochs.isEmpty()) {
-            qDebug() << "[Application] Нет эпох для фильтрации (RINEX пуст)";
-         } else {
-            qDebug() << "[Application] Извлечено эпох для фильтрации:" << ctx.allowedEpochs.size();
+            ctx_.allowedEpochs = intersectEpochs(epochsSp3, epochsNav);
+            epochsPrepared     = true;
+
+            qDebug() << "[Application] epochs prepared:"
+                     << "sp3=" << epochsSp3.size()
+                     << "nav=" << epochsNav.size()
+                     << "intersection=" << ctx_.allowedEpochs.size();
          }
       }
+
       qDebug() << "=== Завершение работы модуля:" << module->name();
    }
 
    qDebug() << "[Application] Пайплайн завершён";
-
-
    return 0;
 }
 
-QVector<QDateTime> Application::extractEpochs(const sp3::SP3_FILE* f) noexcept{
+QJsonObject Application::getResultsAsJson() const {
+   QJsonObject res;
+
+   // 1. Базовая статистика
+   res.insert("processed_epochs_count", ctx_.allowedEpochs.size());
+   res.insert("grid_points_count",      ctx_.gridPoints.size());
+
+   // 2. Сериализация навигационных решений
+   QJsonArray epochsArray;
+
+   // Проходим по всем эпохам, для которых есть решения
+   for (auto epochIt = ctx_.solutions.constBegin(); epochIt != ctx_.solutions.constEnd(); ++epochIt) {
+      QJsonObject epochObj;
+      // Сохраняем время в стандартном ISO 8601 формате
+      epochObj.insert("time", epochIt.key().toString(Qt::ISODate));
+
+      QJsonArray  pointsArray;
+      const auto& pointsMap = epochIt.value();
+
+      for (auto pointIt = pointsMap.constBegin(); pointIt != pointsMap.constEnd(); ++pointIt) {
+         const auto& gridPoint = pointIt.key();
+         const auto& navSol    = pointIt.value();
+
+         QJsonObject pointObj;
+
+         // координаты виртуальной точки наблюдления
+         pointObj.insert("lat",       gridPoint.llh.latitude);
+         pointObj.insert("lon",       gridPoint.llh.longitude);
+         pointObj.insert("height",    gridPoint.llh.height);
+
+         pointObj.insert("converged", navSol.converged);
+         pointObj.insert("num_sats",  navSol.num_sats);
+
+         // Если решение сошлось, добавляем метрики
+         if (navSol.converged) {
+            pointObj.insert("err3d",       navSol.err3d);
+            pointObj.insert("horiz_err",   navSol.horiz_err);
+            pointObj.insert("vert_err",    navSol.vert_err);
+            pointObj.insert("postfit_rms", navSol.postfit_rms);
+            pointObj.insert("delta_clk_s", navSol.delta_clk_s);
+
+            // Вложенный объект DOP
+            QJsonObject dopObj;
+            dopObj.insert("pdop", navSol.dop.PDOP);
+            dopObj.insert("hdop", navSol.dop.HDOP);
+            dopObj.insert("vdop", navSol.dop.VDOP);
+            dopObj.insert("gdop", navSol.dop.GDOP);
+            pointObj.insert("dop", dopObj);
+
+            // Вложенный объект отклонения позиции
+            QJsonObject deltaPosObj;
+            deltaPosObj.insert("x", navSol.delta_pos_ecef.x);
+            deltaPosObj.insert("y", navSol.delta_pos_ecef.y);
+            deltaPosObj.insert("z", navSol.delta_pos_ecef.z);
+            pointObj.insert("delta_pos_ecef", deltaPosObj);
+         }
+
+         pointsArray.append(pointObj);
+      }
+
+      epochObj.insert("points", pointsArray);
+      epochsArray.append(epochObj);
+   }
+
+   res.insert("solutions", epochsArray);
+
+   // Примечание: Массив ctx_.residualErrors здесь не сериализуется,
+   // чтобы не раздувать JSON до гигантских размеров. Если ошибки по каждому
+   // спутнику критичны для выдачи в ПОЭХ, нужно добавить аналогичный цикл
+
+   return res;
+}
+
+QVector<QDateTime> Application::extractEpochs(const sp3::SP3_FILE* f) noexcept {
    QVector<QDateTime> res;
 
    if (!f) {
@@ -88,7 +160,7 @@ QVector<QDateTime> Application::extractEpochs(const sp3::SP3_FILE* f) noexcept{
    return res;
 }
 
-QVector<QDateTime> Application::extractEpochs(const rinex::RINEX_FILE* f) noexcept{
+QVector<QDateTime> Application::extractEpochs(const rinex::RINEX_FILE* f) noexcept {
    QVector<QDateTime> res;
 
    if (!f) {
@@ -100,4 +172,25 @@ QVector<QDateTime> Application::extractEpochs(const rinex::RINEX_FILE* f) noexce
       res.push_back(it.key());
    }
    return res;
+}
+
+QVector<QDateTime> Application::intersectEpochs(const QVector<QDateTime>& a,
+                                                const QVector<QDateTime>& b) noexcept {
+   QSet<QDateTime> setB;
+
+   setB.reserve(b.size());
+
+   for (const auto& t : b) {
+      setB.insert(t);
+   }
+
+   QVector<QDateTime> out;
+   out.reserve(std::min(a.size(), b.size()));
+
+   for (const auto& t : a) {
+      if (setB.contains(t)) {
+         out.push_back(t);
+      }
+   }
+   return out;
 }

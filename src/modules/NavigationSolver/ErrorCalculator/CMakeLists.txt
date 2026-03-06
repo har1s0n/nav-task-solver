@@ -1,21 +1,22 @@
-include(${PROJECT_SOURCE_DIR}/inavFramework/import.cmake)
+include(${INAV_FRAMEWORK_PATH}/import.cmake)
 
 set(public_headers
+    errorcalculator.h
     )
 set(sources
     ${public_headers}
+    errorcalculator.cpp
     )
 
-add_library(ErrorCalculator ${sources}
-    errorcalculator.h errorcalculator.cpp)
+add_library(ErrorCalculator OBJECT ${sources})
 
 target_include_directories(ErrorCalculator
-    PUBLIC
-        $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/src/modules/NavigationSolver/ErrorCalculator>
-        $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/src>
-        $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/inavFramework>
-        $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/inavFramework/include>
-        $<INSTALL_INTERFACE:include>
+  PUBLIC
+    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/src/modules/IO>
+    ${inavFramework_INCLUDE_DIRS}
+    $<INSTALL_INTERFACE:include>
+  PRIVATE
+    ${PROJECT_SOURCE_DIR}/src
 )
 
 if (QT_VERSION EQUAL 5)

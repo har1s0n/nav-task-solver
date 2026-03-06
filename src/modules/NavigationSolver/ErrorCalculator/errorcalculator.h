@@ -18,10 +18,17 @@ public:
 private:
 
    void   computeResidualErrors(pipeline::Context& ctx);
+
    double correctSp3ClockL3toL1(pipeline::Context& ctx,
                                 const Satellite&   sat,
                                 const QDateTime&   epoch,
                                 double             clockL3) const;
+
+   double correctSp3ClockL3toL1(pipeline::Context& ctx,
+                                const Satellite&   sat,
+                                const QDateTime&   epoch,
+                                double             clockL3,
+                                qint64*            dcbMissingCounter) const;
 
    double computeBroadcastClockL1_GLO(const  rinex::R_TIME& tr,
                                       const QDateTime&      epoch);

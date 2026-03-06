@@ -1,6 +1,4 @@
-include(${PROJECT_SOURCE_DIR}/inavFramework/import.cmake)
-
-message(STATUS "inavFramework_INCLUDE_DIRS = ${inavFramework_INCLUDE_DIRS}")
+include(${INAV_FRAMEWORK_PATH}/import.cmake)
 
 set(public_headers
     datamanager.h
@@ -14,16 +12,15 @@ set(sources
     dcbparser.cpp
 )
 
-add_library(IO ${sources})
+add_library(IO OBJECT ${sources})
 
 target_include_directories(IO
   PUBLIC
     $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/src/modules/IO>
-    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/inavFramework>
-    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/inavFramework/include>
-    $<INSTALL_INTERFACE:include>  # на будущее (при install)
+    ${inavFramework_INCLUDE_DIRS}
+    $<INSTALL_INTERFACE:include>
   PRIVATE
-    ${PROJECT_SOURCE_DIR}/src     # если где-то внутри .cpp вы инклюдите через "modules/.."
+    ${PROJECT_SOURCE_DIR}/src
 )
 
 if (QT_VERSION EQUAL 5)

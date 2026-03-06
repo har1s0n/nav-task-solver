@@ -1,4 +1,4 @@
-include(${PROJECT_SOURCE_DIR}/inavFramework/import.cmake)
+include(${INAV_FRAMEWORK_PATH}/import.cmake)
 
 set(public_headers
     satelliteselector.h
@@ -8,12 +8,15 @@ set(sources
     satelliteselector.cpp
     )
 
-add_library(SatelliteSelector ${sources})
+add_library(SatelliteSelector OBJECT ${sources})
 
 target_include_directories(SatelliteSelector
-    PRIVATE
-        ${PROJECT_SOURCE_DIR}/src
-        ${inavFramework_INCLUDE_DIRS}
+  PUBLIC
+    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/src/modules/IO>
+    ${inavFramework_INCLUDE_DIRS}
+    $<INSTALL_INTERFACE:include>
+  PRIVATE
+    ${PROJECT_SOURCE_DIR}/src
 )
 
 if (QT_VERSION EQUAL 5)
