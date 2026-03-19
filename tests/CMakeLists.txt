@@ -6,16 +6,22 @@ enable_testing()
 
 include(FetchContent)
 
-# --- CMP0135: включаем NEW поведение и/или задаём DOWNLOAD_EXTRACT_TIMESTAMP ---
-if(POLICY CMP0135)
-  cmake_policy(SET CMP0135 NEW)
+set(GTEST_URL "https://github.com/google/googletest/archive/f8d7d77c06936315286eb55f8de22cd23c188571.zip")
+
+if(CMAKE_VERSION VERSION_GREATER_EQUAL "3.24")
+  # Опция существует только с 3.24
+  FetchContent_Declare(
+    googletest
+    URL "${GTEST_URL}"
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+  )
+else()
+  FetchContent_Declare(
+    googletest
+    URL "${GTEST_URL}"
+  )
 endif()
 
-FetchContent_Declare(
-  googletest
-  URL https://github.com/google/googletest/archive/f8d7d77c06936315286eb55f8de22cd23c188571.zip
-  DOWNLOAD_EXTRACT_TIMESTAMP TRUE
-)
 FetchContent_MakeAvailable(googletest)
 
 find_package(Qt6 REQUIRED COMPONENTS Core)
