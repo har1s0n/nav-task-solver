@@ -9,6 +9,96 @@
 using namespace io;
 using namespace sbas;
 
+constexpr int kPrnMaskHoldSeconds     = 600;
+constexpr int kFastTimeoutSeconds     = 18;
+constexpr int kUdreTimeoutSeconds     = 600;
+constexpr int kDegrTimeoutSeconds     = 600;
+constexpr int kLongTermTimeoutSeconds = 360;
+constexpr int kIonoHoldSeconds        = 600;
+
+template<typename T>
+int extractLtIod(const T& s) {
+   return static_cast<int> (s.iode);
+}
+
+namespace {
+struct Daf0Summary {
+   qint64 count{ 0 };
+   qint64 pos{ 0 };
+   qint64 neg{ 0 };
+   qint64 zero{ 0 };
+
+   double sumAbsPos{ 0.0 };
+   double sumAbsNeg{ 0.0 };
+
+   double maxAbsPos{ 0.0 };
+   double maxAbsNeg{ 0.0 };
+};
+
+static inline void accumulateDaf0Summary(Daf0Summary& s, double v) {
+   ++s.count;
+
+   if (v > 0.0) {
+      ++s.pos;
+      const double a = std::abs(v);
+      s.sumAbsPos += a;
+
+      if (a > s.maxAbsPos) {
+         s.maxAbsPos = a;
+      }
+   } else if (v < 0.0) {
+      ++s.neg;
+      const double a = std::abs(v);
+      s.sumAbsNeg += a;
+
+      if (a > s.maxAbsNeg) {
+         s.maxAbsNeg = a;
+      }
+   } else {
+      ++s.zero;
+   }
+}
+
+static inline void printDaf0Summary(const QString& tag, const Daf0Summary& s) {
+   const double meanAbsPos = (s.pos > 0) ? (s.sumAbsPos / static_cast<double> (s.pos)) : 0.0;
+   const double meanAbsNeg = (s.neg > 0) ? (s.sumAbsNeg / static_cast<double> (s.neg)) : 0.0;
+
+   qInfo().noquote()
+      << QString("[%1] count=%2 | pos=%3 neg=%4 zero=%5 | "
+                 "mean|pos|=%6 mean|neg|=%7 | max|pos|=%8 max|neg|=%9")
+      .arg(tag)
+      .arg(s.count)
+      .arg(s.pos)
+      .arg(s.neg)
+      .arg(s.zero)
+      .arg(meanAbsPos,  0, 'e', 6)
+      .arg(meanAbsNeg,  0, 'e', 6)
+      .arg(s.maxAbsPos, 0, 'e', 6)
+      .arg(s.maxAbsNeg, 0, 'e', 6);
+}
+} // namespace
+
+void SBASCorrectionStore::logLt25GlonassStoreDaf0Summary() const {
+   Daf0Summary s;
+
+   for (auto it = longTermBySat_.cbegin(); it != longTermBySat_.cend(); ++it) {
+      const Satellite& sat = it.key();
+
+      if (sat.getSystem() != SatelliteSystem::TYPE::GLONASS) {
+         continue;
+      }
+
+      for (const auto& e : it.value()) {
+         if ((e.source == LongTermCorrectionEntry::Source::From25) &&
+             !e.hasVelocity) {
+            accumulateDaf0Summary(s, e.deltaAf0);
+         }
+      }
+   }
+
+   printDaf0Summary(QStringLiteral("LT25_GLO_STORE_DAF0_SUMMARY"), s);
+}
+
 bool SBASCorrectionStore::load(SourceType type, const QString& path) {
    parsed_.clear();
    parsedMessages_.clear();
@@ -117,14 +207,16 @@ bool SBASCorrectionStore::loadDb() {
 }
 
 std::optional<Satellite> SBASCorrectionStore::resolveByLocalIndex(int localIdx, const QDateTime& t) const {
-   for (const auto& iv : prnMasks_) {
-      if ((t >= iv.start) && (t < iv.end)) {
-         auto it = iv.mapLocalIdxToSat.find(localIdx);
+   const auto* iv = activePrnMask(t);
 
-         if (it != iv.mapLocalIdxToSat.end()) {
-            return it.value();
-         }
-      }
+   if (!iv) {
+      return std::nullopt;
+   }
+
+   auto it = iv->mapLocalIdxToSat.find(localIdx);
+
+   if (it != iv->mapLocalIdxToSat.end()) {
+      return it.value();
    }
    return std::nullopt;
 }
@@ -134,26 +226,161 @@ std::optional<Satellite> SBASCorrectionStore::resolveByMaskNumber(int prnMaskNum
       return std::nullopt;
    }
 
-   for (const auto& iv : prnMasks_) {
-      if ((t >= iv.start) && (t < iv.end)) {
-         const int idx0 = prnMaskNumber - 1;
+   const auto* iv = activePrnMask(t);
 
-         if ((idx0 >= 0) && (idx0 < iv.activePspsOrdered.size())) {
-            auto it = iv.mapLocalIdxToSat.find(iv.activePspsOrdered[idx0]);
+   if (!iv) {
+      return std::nullopt;
+   }
 
-            if (it != iv.mapLocalIdxToSat.end()) {
-               return it.value();
-            }
-         }
-      }
+   const int idx0 = prnMaskNumber - 1;
+
+   if ((idx0 < 0) || (idx0 >= iv->activePspsOrdered.size())) {
+      return std::nullopt;
+   }
+
+   auto it = iv->mapLocalIdxToSat.find(iv->activePspsOrdered[idx0]);
+
+   if (it != iv->mapLocalIdxToSat.end()) {
+      return it.value();
    }
    return std::nullopt;
 }
 
+std::optional<int> SBASCorrectionStore::activePrnMaskIodp(const QDateTime& t) const {
+   const auto* iv = activePrnMask(t);
+
+   if (!iv) {
+      return std::nullopt;
+   }
+   return iv->iodp;
+}
+
+const PrnMaskInterval*SBASCorrectionStore::activePrnMask(const QDateTime& t) const {
+   for (auto it = prnMasks_.crbegin(); it != prnMasks_.crend(); ++it) {
+      if ((t >= it->start) && (t < it->end)) {
+         return &(*it);
+      }
+   }
+   return nullptr;
+}
+
+const FastEntry*SBASCorrectionStore::selectedFastEntry(const Satellite& sat, const QDateTime& t) const {
+   const auto maskIodp = activePrnMaskIodp(t);
+
+   auto it = fast_.find(sat);
+
+   if (it == fast_.end()) {
+      return nullptr;
+   }
+
+   for (auto rit = it.value().crbegin(); rit != it.value().crend(); ++rit) {
+      const auto& e = *rit;
+
+      if (!((t >= e.start) && (t < e.end))) {
+         continue;
+      }
+
+      if (maskIodp && (e.iodp >= 0) && (e.iodp != *maskIodp)) {
+         continue;
+      }
+
+      if (e.doNotUse || !qIsFinite(e.prc_m)) {
+         return nullptr;
+      }
+
+      return &e;
+   }
+
+   return nullptr;
+}
+
+const UdreEntry*SBASCorrectionStore::selectedUdreEntry(const Satellite& sat,
+                                                       const QDateTime& t) const {
+   const auto maskIodp    = activePrnMaskIodp(t);
+   const auto curFastIodf = fastIodf(sat, t);
+
+   auto it = udre_.find(sat);
+
+   if (it == udre_.end()) {
+      return nullptr;
+   }
+
+   const auto& vec = it.value();
+
+   // 1) Пытаемся найти запись, согласованную с текущим FAST IODF
+   if (curFastIodf) {
+      for (auto rit = vec.crbegin(); rit != vec.crend(); ++rit) {
+         const auto& e = *rit;
+
+         if (!((t >= e.start) && (t < e.end))) {
+            continue;
+         }
+
+         if (maskIodp && (e.iodp >= 0) && (e.iodp != *maskIodp)) {
+            continue;
+         }
+
+         if (e.iodf == *curFastIodf) {
+            return &e;
+         }
+      }
+   }
+
+   // 2) Временный fallback для type 6 без привязки по IODF
+   for (auto rit = vec.crbegin(); rit != vec.crend(); ++rit) {
+      const auto& e = *rit;
+
+      if (!((t >= e.start) && (t < e.end))) {
+         continue;
+      }
+
+      if (maskIodp && (e.iodp >= 0) && (e.iodp != *maskIodp)) {
+         continue;
+      }
+
+      if (e.iodf < 0) {
+         return &e;
+      }
+   }
+
+   return nullptr;
+}
+
+const LongTermCorrectionEntry*SBASCorrectionStore::selectedLongTermEntry(const Satellite& sat, const QDateTime& t) const {
+   const auto maskIodp = activePrnMaskIodp(t);
+
+   auto it = longTermBySat_.find(sat);
+
+   if (it == longTermBySat_.end()) {
+      return nullptr;
+   }
+
+   for (auto rit = it.value().crbegin(); rit != it.value().crend(); ++rit) {
+      const auto& e = *rit;
+
+      if (!((t >= e.start) && (t < e.end))) {
+         continue;
+      }
+
+      if (maskIodp && (e.iodp >= 0) && (e.iodp != *maskIodp)) {
+         continue;
+      }
+
+      return &e;
+   }
+
+   return nullptr;
+}
+
 void SBASCorrectionStore::buildTimelines() {
    prnMasks_.clear();
-   udre_.clear(); fast_.clear(); degr_.clear();
-   ionoBands_.clear(); ionoObs_.clear(); longTermBySat_.clear();
+   udre_.clear();
+   fast_.clear();
+   degr_.clear();
+   ionoBands_.clear();
+   ionoObs_.clear();
+   longTermBySat_.clear();
+   gpsGloOffsets_.clear();
 
    for (auto it = parsed_.begin(); it != parsed_.end(); ++it) {
       std::sort(it.value().begin(), it.value().end(), [](const auto& a, const auto& b) {
@@ -187,6 +414,28 @@ void SBASCorrectionStore::buildTimelines() {
       tMax = QDateTime();
    }
 
+   // --------- NETWORK OFFSET / TIME OFFSET (type 12) ---------
+   const auto netMsgs = parsed_.value(MESSAGE_TYPE::NETWORK_OFFSET);
+
+   for (int i = 0; i < netMsgs.size(); ++i) {
+      auto m = std::dynamic_pointer_cast<MSG_NETWORK_OFFSET> (netMsgs[i]);
+
+      if (!m) {
+         continue;
+      }
+
+      TimeOffsetInterval iv;
+      iv.start = m->recvTime;
+      iv.end   = (i + 1 < netMsgs.size() && netMsgs[i + 1])
+                        ? netMsgs[i + 1]->recvTime
+                        : (maxRecv.isValid()
+                               ? maxRecv.addSecs(1)
+                               : m->recvTime.addSecs(1));
+      iv.rawDeltaAGlonass_s = m->deltaAGlonassCandidate_s;
+
+      gpsGloOffsets_.push_back(iv);
+   }
+
    // --------- PRN MASK (1) ---------
    const auto prnMsgs = parsed_.value(MESSAGE_TYPE::PRN_MASK);
 
@@ -199,23 +448,30 @@ void SBASCorrectionStore::buildTimelines() {
       PrnMaskInterval iv;
       iv.start = m->recvTime;
       iv.end   = (i + 1 < prnMsgs.size() &&
-                  prnMsgs[i + 1]) ? prnMsgs[i +
-                                            1]->recvTime :
-                 (maxRecv.isValid() ? maxRecv.addSecs(600) : m->recvTime.addSecs(600));
+                  prnMsgs[i + 1]) ? prnMsgs[i + 1]->recvTime
+                     : (maxRecv.isValid() ? maxRecv.addSecs(kPrnMaskHoldSeconds)
+                                          : m->recvTime.addSecs(kPrnMaskHoldSeconds));
+      iv.iodp              = m->iodp;
       iv.activePspsOrdered = m->activePsps;
+
       int N = qMin(m->activePsps.size(), m->satelites.size());
 
       for (int k = 0; k < N; ++k) {
          SatelliteSystem::TYPE sys = SatelliteSystem::TYPE::UNKNOWN;
 
          switch (m->satelites[k].systemSat) {
-           case PURPOSE_SYSTEM::GPS: sys          = SatelliteSystem::TYPE::GPS; break;
-           case PURPOSE_SYSTEM::GLONASS: sys      = SatelliteSystem::TYPE::GLONASS; break;
+           case PURPOSE_SYSTEM::GPS:          sys = SatelliteSystem::TYPE::GPS; break;
+           case PURPOSE_SYSTEM::GLONASS:      sys = SatelliteSystem::TYPE::GLONASS; break;
            case PURPOSE_SYSTEM::GEO_WAAS_PRN: sys = SatelliteSystem::TYPE::SBAS; break;
            default: break;
          }
-         iv.mapLocalIdxToSat.insert(m->activePsps[k], Satellite(m->satelites[k].satId, sys));
+
+         iv.mapLocalIdxToSat.insert(
+            m->activePsps[k],
+            Satellite(m->satelites[k].satId, sys)
+            );
       }
+
       prnMasks_.push_back(std::move(iv));
    }
 
@@ -229,14 +485,35 @@ void SBASCorrectionStore::buildTimelines() {
                            }
 
                            for (const auto& s : m->satelites) {
-                              if (auto sat = resolveByMaskNumber((int)s.satNum, m->recvTime); sat && !s.doNotUse) {
-                                 fast_[*sat].push_back({ m->recvTime, m->recvTime.addSecs(300), m->iodf, m->iodp, s.fc, s.doNotUse });
-                                 udre_[*sat].push_back({ m->recvTime, m->recvTime.addSecs(600), s.UDREI, s.UDREI_meters,
-                                                         s.doNotUse ? qInf() : s.sigma_UDREI, m->iodf, m->iodp, ty });
+                              if (auto sat = resolveByMaskNumber((int)s.satNum, m->recvTime)) {
+                                 fast_[*sat].push_back({
+                  m->recvTime,
+                  m->recvTime.addSecs(kFastTimeoutSeconds),
+                  m->recvTime,
+                  m->iodf,
+                  m->iodp,
+                  s.doNotUse ? qQNaN() : s.fc,
+                  s.doNotUse,
+                  ty
+               });
+
+                                 udre_[*sat].push_back({
+                  m->recvTime,
+                  m->recvTime.addSecs(kUdreTimeoutSeconds),
+                  m->recvTime,
+                  s.UDREI,
+                  s.doNotUse ? qInf() : s.UDREI_meters,
+                  s.doNotUse ? qInf() : s.sigma_UDREI,
+                  m->iodf,
+                  m->iodp,
+                  s.doNotUse,
+                  ty
+               });
                               }
                            }
                         }
                      };
+
    ingestFast(MESSAGE_TYPE::FAST_CORRECTIONS_1);
    ingestFast(MESSAGE_TYPE::FAST_CORRECTIONS_2);
    ingestFast(MESSAGE_TYPE::FAST_CORRECTIONS_3);
@@ -250,11 +527,30 @@ void SBASCorrectionStore::buildTimelines() {
       }
 
       for (const auto& s : m->fast_correction.satelites) {
-         if (auto sat = resolveByMaskNumber((int)s.satNum, m->recvTime); sat && !s.doNotUse) {
-            fast_[*sat].push_back({ m->recvTime, m->recvTime.addSecs(300), m->fast_correction.iodf, m->fast_correction.iodp, s.fc,
-                                    s.doNotUse });
-            udre_[*sat].push_back({ m->recvTime, m->recvTime.addSecs(600), s.UDREI, s.UDREI_meters, s.doNotUse ? qInf() : s.sigma_UDREI,
-                                    m->fast_correction.iodf, m->fast_correction.iodp, MESSAGE_TYPE::MIXED_CORRECTIONS_SATELLITE_ERROR });
+         if (auto sat = resolveByMaskNumber((int)s.satNum, m->recvTime)) {
+            fast_[*sat].push_back({
+               m->recvTime,
+               m->recvTime.addSecs(kFastTimeoutSeconds),
+               m->recvTime,
+               m->fast_correction.iodf,
+               m->fast_correction.iodp,
+               s.doNotUse ? qQNaN() : s.fc,
+               s.doNotUse,
+               MESSAGE_TYPE::MIXED_CORRECTIONS_SATELLITE_ERROR
+            });
+
+            udre_[*sat].push_back({
+               m->recvTime,
+               m->recvTime.addSecs(kUdreTimeoutSeconds),
+               m->recvTime,
+               s.UDREI,
+               s.doNotUse ? qInf() : s.UDREI_meters,
+               s.doNotUse ? qInf() : s.sigma_UDREI,
+               m->fast_correction.iodf,
+               m->fast_correction.iodp,
+               s.doNotUse,
+               MESSAGE_TYPE::MIXED_CORRECTIONS_SATELLITE_ERROR
+            });
          }
       }
    }
@@ -268,9 +564,19 @@ void SBASCorrectionStore::buildTimelines() {
       }
 
       for (const auto& s : m->satelites) {
-         if (auto sat = resolveByMaskNumber((int)s.satNum, m->recvTime); sat && !s.doNotUse) {
-            udre_[*sat].push_back({ m->recvTime, m->recvTime.addSecs(600), s.UDREI, s.UDREI_meters, s.sigma_UDREI, -1, -1,
-                                    MESSAGE_TYPE::INTEGRITY_INFORMATION });
+         if (auto sat = resolveByMaskNumber((int)s.satNum, m->recvTime)) {
+            udre_[*sat].push_back({
+               m->recvTime,
+               m->recvTime.addSecs(kUdreTimeoutSeconds),
+               m->recvTime,
+               s.UDREI,
+               s.doNotUse ? qInf() : s.UDREI_meters,
+               s.doNotUse ? qInf() : s.sigma_UDREI,
+               -1,
+               -1,
+               s.doNotUse,
+               MESSAGE_TYPE::INTEGRITY_INFORMATION
+            });
          }
       }
    }
@@ -285,7 +591,12 @@ void SBASCorrectionStore::buildTimelines() {
 
       for (const auto& s : m->satelites) {
          if (auto sat = resolveByMaskNumber((int)s.satNum, m->recvTime); sat && !s.doNotUse) {
-            degr_[*sat].push_back({ m->recvTime, m->recvTime.addSecs(600), s.a, s.updateInterval });
+            degr_[*sat].push_back({
+               m->recvTime,
+               m->recvTime.addSecs(kDegrTimeoutSeconds),
+               s.a,
+               s.updateInterval
+            });
          }
       }
    }
@@ -299,20 +610,44 @@ void SBASCorrectionStore::buildTimelines() {
       }
 
       for (const auto& s : m->satellites_code_1) {
+         const auto satResolved = resolveByMaskNumber(s.prn, m->recvTime);
+
          if (auto sat = resolveByMaskNumber(s.prn, m->recvTime)) {
-            longTermBySat_[*sat].push_back({ m->recvTime, m->recvTime.addSecs(7200), s.iodp >= 0 ? s.iodp : -1, s.t0 >= 0 ? s.t0 : QTime(0,
-                                                                                                                                         0).
-                                             secsTo(m->recvTime.time()), { s.deltaEcef.x, s.deltaEcef.y, s.deltaEcef.z },
-                                             { s.deltaRoc.x, s.deltaRoc.y, s.deltaRoc.z }, true, s.delta_a_f0, s.delta_a_f1,
-                                             LongTermCorrectionEntry::Source::From25 });
+            longTermBySat_[*sat].push_back({
+               m->recvTime,
+               m->recvTime,
+               m->recvTime.addSecs(kLongTermTimeoutSeconds),
+               s.iode,
+               s.iodp,
+               s.t0,
+               { s.deltaEcef.x, s.deltaEcef.y, s.deltaEcef.z },
+               { s.deltaRoc.x,  s.deltaRoc.y,  s.deltaRoc.z  },
+               true,
+               s.delta_a_f0,
+               s.delta_a_f1,
+               LongTermCorrectionEntry::Source::From25
+            });
          }
       }
 
       for (const auto& s : m->satellites_code_0) {
+         const auto satResolved = resolveByMaskNumber(s.prn, m->recvTime);
+
          if (auto sat = resolveByMaskNumber(s.prn, m->recvTime)) {
-            longTermBySat_[*sat].push_back({ m->recvTime, m->recvTime.addSecs(7200), s.iodp >= 0 ? s.iodp : -1,
-                                             QTime(0, 0).secsTo(m->recvTime.time()), { s.deltaEcef.x, s.deltaEcef.y, s.deltaEcef.z },
-                                             { 0, 0, 0 }, false, s.delta_a_f0, 0.0, LongTermCorrectionEntry::Source::From25 });
+            longTermBySat_[*sat].push_back({
+               m->recvTime,
+               m->recvTime,
+               m->recvTime.addSecs(kLongTermTimeoutSeconds),
+               s.iode,
+               s.iodp,
+               QTime(0, 0).secsTo(m->recvTime.time()),
+               { s.deltaEcef.x, s.deltaEcef.y, s.deltaEcef.z },
+               { 0, 0, 0 },
+               false,
+               s.delta_a_f0,
+               0.0,
+               LongTermCorrectionEntry::Source::From25
+            });
          }
       }
    }
@@ -327,38 +662,111 @@ void SBASCorrectionStore::buildTimelines() {
       for (const auto& basePtr : m->satellites) {
          if (auto c1 = std::dynamic_pointer_cast<VELOCITY_CODE_1> (basePtr)) {
             if (auto sat = resolveByMaskNumber(c1->prn, m->recvTime)) {
-               longTermBySat_[*sat].push_back({ m->recvTime, m->recvTime.addSecs(7200), m->iodp,
-                                                c1->t0 >= 0 ? c1->t0 : QTime(0, 0).secsTo(m->recvTime.time()),
-                                                { c1->deltaEcef.x, c1->deltaEcef.y, c1->deltaEcef.z },
-                                                { c1->deltaRoc.x, c1->deltaRoc.y, c1->deltaRoc.z }, true, c1->delta_a_f0, c1->delta_a_f1,
-                                                LongTermCorrectionEntry::Source::From24 });
+               longTermBySat_[*sat].push_back({
+                  m->recvTime,
+                  m->recvTime,
+                  m->recvTime.addSecs(kLongTermTimeoutSeconds),
+                  c1->iode,
+                  m->iodp,
+                  c1->t0,
+                  { c1->deltaEcef.x, c1->deltaEcef.y, c1->deltaEcef.z },
+                  { c1->deltaRoc.x,  c1->deltaRoc.y,  c1->deltaRoc.z  },
+                  true,
+                  c1->delta_a_f0,
+                  c1->delta_a_f1,
+                  LongTermCorrectionEntry::Source::From24
+               });
             }
          } else if (auto c0 = std::dynamic_pointer_cast<VELOCITY_CODE_0> (basePtr)) {
             if (auto sat = resolveByMaskNumber(c0->prn, m->recvTime)) {
-               longTermBySat_[*sat].push_back({ m->recvTime, m->recvTime.addSecs(7200), m->iodp, QTime(0, 0).secsTo(m->recvTime.time()),
-                                                { c0->deltaEcef.x, c0->deltaEcef.y, c0->deltaEcef.z }, { 0, 0, 0 }, false, c0->delta_a_f0,
-                                                0.0, LongTermCorrectionEntry::Source::From24 });
+               longTermBySat_[*sat].push_back({
+                  m->recvTime,
+                  m->recvTime,
+                  m->recvTime.addSecs(kLongTermTimeoutSeconds),
+                  extractLtIod(*c0),
+                  m->iodp,
+                  QTime(0, 0).secsTo(m->recvTime.time()),
+                  { c0->deltaEcef.x, c0->deltaEcef.y, c0->deltaEcef.z },
+                  { 0, 0, 0 },
+                  false,
+                  c0->delta_a_f0,
+                  0.0,
+                  LongTermCorrectionEntry::Source::From24
+               });
             }
          }
       }
    }
 
-   auto fixOverlaps = [](auto& mapOfVecs) {
-                         for (auto it = mapOfVecs.begin(); it != mapOfVecs.end(); ++it) {
-                            auto& vec = it.value();
-                            std::sort(vec.begin(), vec.end(), [](const auto& a, const auto& b){
-            return a.start < b.start;
+   auto normalizeUdreSameStart = [](auto& mapOfVecs) {
+                                    for (auto it = mapOfVecs.begin(); it != mapOfVecs.end(); ++it) {
+                                       auto& vec = it.value();
+
+                                       std::sort(vec.begin(), vec.end(), [](const auto& a, const auto& b) {
+            if (a.start != b.start) {
+               return a.start < b.start;
+            }
+
+            if (a.recvTime != b.recvTime) {
+               return a.recvTime < b.recvTime;
+            }
+
+            if (a.source != b.source) {
+               return static_cast<int> (a.source) < static_cast<int> (b.source);
+            }
+            return a.iodf < b.iodf;
          });
 
-                            for (int i = 0; i < vec.size() - 1; ++i) {
-                               vec[i].end = vec[i].start < vec[i + 1].start ? qMin(vec[i].end, vec[i + 1].start) : vec[i].start;
-                            }
-                            vec.erase(std::remove_if(vec.begin(), vec.end(), [](const auto& e){
-            return e.start >= e.end;
-         }), vec.end());
-                         }
-                      };
-   fixOverlaps(udre_); fixOverlaps(fast_); fixOverlaps(degr_); fixOverlaps(longTermBySat_);
+                                       for (int i = 0; i < vec.size() - 1; ++i) {
+                                          if (vec[i].start < vec[i + 1].start) {
+                                             vec[i].end = qMin(vec[i].end, vec[i + 1].start);
+                                          }
+                                       }
+
+                                       vec.erase(
+                                          std::remove_if(vec.begin(), vec.end(), [](const auto& e) {
+            return e.start > e.end;
+         }),
+                                          vec.end()
+                                          );
+                                    }
+                                 };
+
+   auto fixOverlapsSoftSameStart = [](auto& mapOfVecs, const char* tag) {
+                                      for (auto it = mapOfVecs.begin(); it != mapOfVecs.end(); ++it) {
+                                         auto& vec = it.value();
+
+                                         std::sort(vec.begin(), vec.end(), [](const auto& a, const auto& b) {
+            if (a.start != b.start) {
+               return a.start < b.start;
+            }
+
+            if (a.recvTime != b.recvTime) {
+               return a.recvTime < b.recvTime;
+            }
+            return static_cast<int> (a.source) < static_cast<int> (b.source);
+         });
+
+                                         for (int i = 0; i < vec.size() - 1; ++i) {
+                                            if (vec[i].start < vec[i + 1].start) {
+                                               vec[i].end = qMin(vec[i].end, vec[i + 1].start);
+                                            } else if (vec[i].start == vec[i + 1].start) {}
+                                         }
+
+                                         vec.erase(
+                                            std::remove_if(vec.begin(), vec.end(), [](const auto& e) {
+            return e.start > e.end;
+         }),
+                                            vec.end()
+                                            );
+                                      }
+                                   };
+
+   normalizeUdreSameStart(udre_);
+   // normalizeUdreSameStart(degr_);
+
+   fixOverlapsSoftSameStart(fast_,          "FAST");
+   fixOverlapsSoftSameStart(longTermBySat_, "LT");
 
    // --------- IONO MASKS (18) ---------
    QHash<int, QVector<std::shared_ptr<MSG_IONOSPHERIC_GRID_POINT_MASK> > > masksByBand;
@@ -376,10 +784,16 @@ void SBASCorrectionStore::buildTimelines() {
          if (!vec[i]) {
             continue;
          }
-         IonoBandSnapshot snap{ vec[i]->recvTime,
-                                (i + 1 < vec.size() &&
-                                 vec[i + 1]) ? vec[i + 1]->recvTime : (tMaxInit ? tMax.addSecs(600) : vec[i]->recvTime.addSecs(600)),
-                                it.key(), static_cast<int> (vec[i]->iod) };
+
+         IonoBandSnapshot snap{
+            vec[i]->recvTime,
+            (i + 1 < vec.size() && vec[i + 1])
+                    ? vec[i + 1]->recvTime
+                    : (tMaxInit ? tMax.addSecs(kIonoHoldSeconds)
+                                : vec[i]->recvTime.addSecs(kIonoHoldSeconds)),
+            it.key(),
+            static_cast<int> (vec[i]->iod)
+         };
 
          if (!(snap.end > snap.start)) {
             snap.end = snap.start.addSecs(1);
@@ -387,9 +801,13 @@ void SBASCorrectionStore::buildTimelines() {
 
          for (const auto& nd : vec[i]->coordinatesRange) {
             if ((nd.idPoint >= 1) && (nd.idPoint <= 201)) {
-               snap.nodesRad.insert(nd.idPoint, { qDegreesToRadians(double(nd.lat)), wrapLon(qDegreesToRadians(double(nd.lon))) });
+               snap.nodesRad.insert(
+                  nd.idPoint,
+                  { qDegreesToRadians(double(nd.lat)), wrapLon(qDegreesToRadians(double(nd.lon))) }
+                  );
             }
          }
+
          ionoBands_[snap.band].push_back(std::move(snap));
       }
    }
@@ -399,13 +817,13 @@ void SBASCorrectionStore::buildTimelines() {
       if (auto m = std::dynamic_pointer_cast<MSG_IONOSPHERIC_DELAY_CORRECTIONS> (r)) {
          const IonoBandSnapshot* snap = nullptr;
 
-         // Ослаблена привязка ко времени! Ищем узлы строго по совпадению IODI в нужной зоне.
+         // Ослаблена привязка ко времени: ищем узлы по совпадению IODI в нужной зоне.
          for (const auto& s : ionoBands_.value(m->numberBand)) {
             if (s.iodi == m->iod) {
                snap = &s;
 
                if ((m->recvTime >= s.start) && (m->recvTime < s.end)) {
-                  break; // Идеальное совпадение
+                  break;
                }
             }
          }
@@ -416,16 +834,24 @@ void SBASCorrectionStore::buildTimelines() {
 
          for (const auto& bp : m->points) {
             if (auto itNode = snap->nodesRad.find(bp.idPoint); (itNode != snap->nodesRad.end())) {
-               // DO-229: Время жизни ионосферы строго 600 секунд!
-               ionoObs_.push_back({ m->recvTime, m->recvTime.addSecs(600), static_cast<int> (m->numberBand), static_cast<int> (m->iod),
-                                    static_cast<int> (bp.idPoint), itNode.value().first,
-                                    itNode.value().second, bp.igp, bp.sigma_give, bp.doNotUse });
+               ionoObs_.push_back({
+                  m->recvTime,
+                  m->recvTime.addSecs(kIonoHoldSeconds),
+                  static_cast<int> (m->numberBand),
+                  static_cast<int> (m->iod),
+                  static_cast<int> (bp.idPoint),
+                  itNode.value().first,
+                  itNode.value().second,
+                  bp.igp,
+                  bp.sigma_give,
+                  bp.doNotUse
+               });
             }
          }
       }
    }
 
-   std::sort(ionoObs_.begin(), ionoObs_.end(), [](const IonoObs& a, const IonoObs& b){
+   std::sort(ionoObs_.begin(), ionoObs_.end(), [](const IonoObs& a, const IonoObs& b) {
       if (a.band != b.band) {
          return a.band < b.band;
       }
@@ -441,46 +867,48 @@ void SBASCorrectionStore::buildTimelines() {
    });
 
    for (int i = 0; i < ionoObs_.size() - 1; ++i) {
-      if ((ionoObs_[i].band == ionoObs_[i + 1].band) && (ionoObs_[i].iodi == ionoObs_[i + 1].iodi) &&
+      if ((ionoObs_[i].band == ionoObs_[i + 1].band) &&
+          (ionoObs_[i].iodi == ionoObs_[i + 1].iodi) &&
           (ionoObs_[i].idPoint == ionoObs_[i + 1].idPoint)) {
          ionoObs_[i].end = qMin(ionoObs_[i].end, ionoObs_[i + 1].start);
       }
    }
-   ionoObs_.erase(std::remove_if(ionoObs_.begin(), ionoObs_.end(), [](const IonoObs& e){
+
+   ionoObs_.erase(
+      std::remove_if(ionoObs_.begin(), ionoObs_.end(), [](const IonoObs& e) {
       return e.start >= e.end;
-   }), ionoObs_.end());
+   }),
+      ionoObs_.end()
+      );
 }
 
 // ---------------- Getters ----------------
 std::optional<double> SBASCorrectionStore::udreSigma_m2(const Satellite& sat, const QDateTime& t) const {
-   if (auto it = udre_.find(sat); (it != udre_.end())) {
-      for (const auto& e : it.value()) {
-         if ((t >= e.start) && (t < e.end)) {
-            return e.sigma_m2;
-         }
+   if (const auto* e = selectedUdreEntry(sat, t)) {
+      if (e->doNotUse || !qIsFinite(e->sigma_m2)) {
+         return std::nullopt;
       }
+      return e->sigma_m2;
    }
    return std::nullopt;
 }
 
 std::optional<double> SBASCorrectionStore::udreBound_m(const Satellite& sat, const QDateTime& t) const {
-   if (auto it = udre_.find(sat); (it != udre_.end())) {
-      for (const auto& e : it.value()) {
-         if ((t >= e.start) && (t < e.end)) {
-            return e.bound_m;
-         }
+   if (const auto* e = selectedUdreEntry(sat, t)) {
+      if (e->doNotUse || !qIsFinite(e->bound_m)) {
+         return std::nullopt;
       }
+      return e->bound_m;
    }
    return std::nullopt;
 }
 
 std::optional<int> SBASCorrectionStore::udreIndex(const Satellite& sat, const QDateTime& t) const {
-   if (auto it = udre_.find(sat); (it != udre_.end())) {
-      for (const auto& e : it.value()) {
-         if ((t >= e.start) && (t < e.end)) {
-            return e.udreIndex;
-         }
+   if (const auto* e = selectedUdreEntry(sat, t)) {
+      if (e->doNotUse) {
+         return std::nullopt;
       }
+      return e->udreIndex;
    }
    return std::nullopt;
 }
@@ -491,6 +919,7 @@ std::optional<double> SBASCorrectionStore::udreSigmaEff_m2(const Satellite& sat,
    if (!s2) {
       return std::nullopt;
    }
+
    double var = *s2;
    auto   d   = degradation(sat, t);
    auto   lu  = fastLastUpdate(sat, t);
@@ -499,51 +928,85 @@ std::optional<double> SBASCorrectionStore::udreSigmaEff_m2(const Satellite& sat,
       double dt = std::max(0, (int)lu->secsTo(t));
       var += (d->a * dt) * (d->a * dt);
    }
+
    return var;
 }
 
 std::optional<int> SBASCorrectionStore::fastIodf(const Satellite& sat, const QDateTime& t) const {
-   if (auto it = fast_.find(sat); (it != fast_.end())) {
-      for (const auto& e : it.value()) {
-         if ((t >= e.start) && (t < e.end)) {
-            return e.iodf;
-         }
-      }
+   if (const auto* e = selectedFastEntry(sat, t)) {
+      return e->iodf;
    }
    return std::nullopt;
 }
 
 std::optional<int> SBASCorrectionStore::fastIodp(const Satellite& sat, const QDateTime& t) const {
-   if (auto it = fast_.find(sat); (it != fast_.end())) {
-      for (const auto& e : it.value()) {
-         if ((t >= e.start) && (t < e.end)) {
-            return e.iodp;
-         }
-      }
+   if (const auto* e = selectedFastEntry(sat, t)) {
+      return e->iodp;
    }
    return std::nullopt;
 }
 
 std::optional<double> SBASCorrectionStore::fastPrc_m(const Satellite& sat, const QDateTime& t) const {
-   if (auto it = fast_.find(sat); (it != fast_.end())) {
-      for (const auto& e : it.value()) {
-         if ((t >= e.start) && (t < e.end) && !e.doNotUse && qIsFinite(e.prc_m)) {
-            return e.prc_m;
-         }
-      }
+   if (const auto* e = selectedFastEntry(sat, t)) {
+      return e->prc_m;
    }
    return std::nullopt;
 }
 
 std::optional<QDateTime> SBASCorrectionStore::fastLastUpdate(const Satellite& sat, const QDateTime& t) const {
-   if (auto it = fast_.find(sat); (it != fast_.end())) {
-      for (const auto& e : it.value()) {
-         if ((t >= e.start) && (t < e.end)) {
-            return e.start;
-         }
-      }
+   if (const auto* e = selectedFastEntry(sat, t)) {
+      return e->recvTime;
    }
    return std::nullopt;
+}
+
+std::optional<io::FastPair> SBASCorrectionStore::fastCurrentPrevious(const Satellite& sat,
+                                                                     const QDateTime& t) const {
+   const auto* cur = selectedFastEntry(sat, t);
+
+   if (!cur) {
+      return std::nullopt;
+   }
+
+   auto it = fast_.find(sat);
+
+   if (it == fast_.end()) {
+      return std::nullopt;
+   }
+
+   const auto  maskIodp = activePrnMaskIodp(t);
+   const auto& vec      = it.value();
+
+   const FastEntry* prev = nullptr;
+
+   for (auto rit = vec.crbegin(); rit != vec.crend(); ++rit) {
+      const auto& e = *rit;
+
+      // строго предыдущая по времени запись
+      const QDateTime curRecv = cur->recvTime.isValid() ? cur->recvTime : cur->start;
+      const QDateTime eRecv   = e.recvTime.isValid()   ? e.recvTime   : e.start;
+
+      if (eRecv >= curRecv) {
+         continue;
+      }
+
+      if (e.doNotUse || !qIsFinite(e.prc_m)) {
+         continue;
+      }
+
+      if (maskIodp && (e.iodp >= 0) && (e.iodp != *maskIodp)) {
+         continue;
+      }
+
+      prev = &e;
+      break;
+   }
+
+   if (!prev) {
+      return std::nullopt;
+   }
+
+   return FastPair{ *cur, *prev };
 }
 
 std::optional<DegrParams> SBASCorrectionStore::degradation(const Satellite& sat, const QDateTime& t) const {
@@ -558,14 +1021,17 @@ std::optional<DegrParams> SBASCorrectionStore::degradation(const Satellite& sat,
 }
 
 const IonoBandSnapshot*SBASCorrectionStore::pickBandSnapshot(double ippLat, double ippLon, const QDateTime& t) const {
-   return nullptr; // Больше не используется, заменено на getActiveGrid
+   Q_UNUSED(ippLat);
+   Q_UNUSED(ippLon);
+   Q_UNUSED(t);
+   return nullptr; // больше не используется, заменено на getActiveGrid
 }
 
-// ---------------- IONO helpers/interp (Переработано по DO-229) ----------------
+// ---------------- IONO helpers/interp ----------------
 QVector<SBASCorrectionStore::ActiveNode> SBASCorrectionStore::getActiveGrid(const QDateTime& t) const {
    QVector<ActiveNode> grid;
 
-   // Собираем ВСЕ активные узлы со всех зон, чтобы преодолеть границы Bands
+   // Собираем все активные узлы со всех зон, чтобы преодолеть границы Bands
    for (const auto& snaps : ionoBands_) {
       for (const auto& s : snaps) {
          if ((t >= s.start) && (t < s.end)) {
@@ -580,7 +1046,6 @@ QVector<SBASCorrectionStore::ActiveNode> SBASCorrectionStore::getActiveGrid(cons
    if (grid.isEmpty()) {
       qDebug() << "CRITICAL: Grid is empty for time" << t << "! Check parsed Type 18 masks.";
    } else {
-      // Выведем хотя бы раз размер сетки, чтобы понять, загрузилась ли она вообще
       static bool once = false;
 
       if (!once) {
@@ -608,6 +1073,7 @@ int SBASCorrectionStore::findCellCorners(const QVector<ActiveNode>& grid,
    for (const auto& node : grid) {
       lats.insert(node.lat_rad);
    }
+
    QList<double> slats = lats.values();
    std::sort(slats.begin(), slats.end());
 
@@ -623,7 +1089,9 @@ int SBASCorrectionStore::findCellCorners(const QVector<ActiveNode>& grid,
          il--;
       }
    }
-   lat_floor = slats[il]; lat_ceil = slats[iu];
+
+   lat_floor = slats[il];
+   lat_ceil  = slats[iu];
 
    auto getLonBoundsForLat = [&](double targetLat, double& lo_floor, double& lo_ceil) -> bool {
                                 QList<double> lons;
@@ -639,30 +1107,39 @@ int SBASCorrectionStore::findCellCorners(const QVector<ActiveNode>& grid,
                                 }
 
                                 std::sort(lons.begin(), lons.end());
-                                lons.erase(std::unique(lons.begin(), lons.end(), [](double a, double b){
+                                lons.erase(
+                                   std::unique(lons.begin(), lons.end(), [](double a, double b) {
          return std::fabs(a - b) < 1e-9;
-      }), lons.end());
+      }),
+                                   lons.end()
+                                   );
 
                                 if (lons.size() == 1) {
-                                   lo_floor = lons[0]; lo_ceil = lons[0]; return true;
+                                   lo_floor = lons[0];
+                                   lo_ceil  = lons[0];
+                                   return true;
                                 }
 
-                                double best_floor = lons.last(), best_ceil = lons.first();
-                                double min_floor_diff = 1e9, min_ceil_diff = 1e9;
+                                double best_floor     = lons.last();
+                                double best_ceil      = lons.first();
+                                double min_floor_diff = 1e9;
+                                double min_ceil_diff  = 1e9;
 
                                 for (double lon : lons) {
                                    double diff = normLonRad(ippLon - lon);
 
                                    if ((diff >= 0) && (diff < min_floor_diff)) {
-                                      min_floor_diff = diff; best_floor = lon;
+                                      min_floor_diff = diff;
+                                      best_floor     = lon;
                                    }
 
                                    if ((diff <= 0) && (std::fabs(diff) < min_ceil_diff)) {
-                                      min_ceil_diff = std::fabs(diff); best_ceil = lon;
+                                      min_ceil_diff = std::fabs(diff);
+                                      best_ceil     = lon;
                                    }
                                 }
 
-                                // Если IPP лежит ровно на линии сетки, формируем коробку из 4 узлов (вес соседних будет 0)
+                                // Если IPP ровно на линии сетки — формируем коробку из 4 узлов
                                 if (std::fabs(best_floor - best_ceil) < 1e-9) {
                                    for (int i = 0; i < lons.size(); ++i) {
                                       if (std::fabs(lons[i] - best_floor) < 1e-9) {
@@ -671,7 +1148,9 @@ int SBASCorrectionStore::findCellCorners(const QVector<ActiveNode>& grid,
                                       }
                                    }
                                 }
-                                lo_floor = best_floor; lo_ceil = best_ceil;
+
+                                lo_floor = best_floor;
+                                lo_ceil  = best_ceil;
                                 return true;
                              };
 
@@ -685,18 +1164,12 @@ int SBASCorrectionStore::findCellCorners(const QVector<ActiveNode>& grid,
       return 0;
    }
 
-   QVector<QPair<double, double> > candidates = { { lat_floor, lo1 }, { lat_floor, lo2 }, { lat_ceil, lo3 }, { lat_ceil, lo4 } };
-
-   // --- ОТЛАДОЧНЫЙ БЛОК НАЧАЛО ---
-   // static bool debug_once = false;
-   // if (!debug_once) {
-   //     qDebug() << "[DIAGNOSTICS] Всего наблюдений Type 26 (ionoObs_) загружено:" << ionoObs_.size();
-   //     debug_once = true;
-   // }
-
-   // qDebug().noquote() << QString("=== Поиск узлов для IPP [%1, %2] на эпоху %3 ===")
-   //                           .arg(qRadiansToDegrees(ippLat)).arg(qRadiansToDegrees(ippLon)).arg(t.toString(Qt::ISODate));
-   // --- ОТЛАДОЧНЫЙ БЛОК КОНЕЦ ---
+   QVector<QPair<double, double> > candidates = {
+      { lat_floor, lo1                                                                                  },
+      { lat_floor, lo2                                                                                  },
+      { lat_ceil,  lo3                                                                                  },
+      { lat_ceil,  lo4                                                                                  }
+   };
 
    for (const auto& cand : candidates) {
       bool foundInGrid = false;
@@ -705,13 +1178,21 @@ int SBASCorrectionStore::findCellCorners(const QVector<ActiveNode>& grid,
       bool isDoNotUse  = false;
 
       for (const auto& node : grid) {
-         // Ищем совпадение координат узла
-         if ((std::fabs(node.lat_rad - cand.first) < 1e-9) && (std::fabs(node.lon_rad - cand.second) < 1e-9)) {
+         if ((std::fabs(node.lat_rad - cand.first) < 1e-9) &&
+             (std::fabs(node.lon_rad - cand.second) < 1e-9)) {
             foundInGrid = true;
 
-            // Ищем данные по этому узлу в массиве Type 26
-            IonoObs dummy; dummy.band = node.band; dummy.iodi = node.iodi; dummy.idPoint = node.idPoint; dummy.start = t;
-            auto    it                = std::upper_bound(ionoObs_.begin(), ionoObs_.end(), dummy, [](const IonoObs& a, const IonoObs& b){
+            IonoObs dummy;
+            dummy.band    = node.band;
+            dummy.iodi    = node.iodi;
+            dummy.idPoint = node.idPoint;
+            dummy.start   = t;
+
+            auto it = std::upper_bound(
+               ionoObs_.begin(),
+               ionoObs_.end(),
+               dummy,
+               [](const IonoObs& a, const IonoObs& b) {
                if (a.band != b.band) {
                   return a.band < b.band;
                }
@@ -724,33 +1205,39 @@ int SBASCorrectionStore::findCellCorners(const QVector<ActiveNode>& grid,
                   return a.idPoint < b.idPoint;
                }
                return a.start < b.start;
-            });
+            }
+               );
 
             if (it != ionoObs_.begin()) {
                auto prevIt = it - 1;
 
-               if ((prevIt->band == node.band) && (prevIt->iodi == node.iodi) && (prevIt->idPoint == node.idPoint)) {
+               if ((prevIt->band == node.band) &&
+                   (prevIt->iodi == node.iodi) &&
+                   (prevIt->idPoint == node.idPoint)) {
                   foundInObs = true;
 
-                  // Проверка времени жизни (600 сек)
                   if ((t >= prevIt->start) && (t < prevIt->end)) {
-                     // Проверка флага целостности
                      if (prevIt->doNotUse) {
                         isDoNotUse = true;
                      } else {
                         bool alreadyAdded = false;
 
                         for (const auto& added : outCorners) {
-                           if ((std::fabs(added.lat_rad - cand.first) < 1e-9) && (std::fabs(added.lon_rad - cand.second) < 1e-9)) {
-                              alreadyAdded = true; break;
+                           if ((std::fabs(added.lat_rad - cand.first) < 1e-9) &&
+                               (std::fabs(added.lon_rad - cand.second) < 1e-9)) {
+                              alreadyAdded = true;
+                              break;
                            }
                         }
 
                         if (!alreadyAdded) {
-                           IonoObs kept = *prevIt; kept.lat_rad = cand.first; kept.lon_rad = cand.second;
+                           IonoObs kept = *prevIt;
+                           kept.lat_rad = cand.first;
+                           kept.lon_rad = cand.second;
                            outCorners.push_back(kept);
                         }
-                        break; // Выходим из цикла по grid, так как узел обработан
+
+                        break;
                      }
                   } else {
                      isExpired = true;
@@ -760,29 +1247,22 @@ int SBASCorrectionStore::findCellCorners(const QVector<ActiveNode>& grid,
          }
       }
 
-      // --- ЛОГИРОВАНИЕ СТАТУСА КАНДИДАТА ---
-      // QString status;
-
-      // if (!foundInGrid) {
-      //    status = "ОШИБКА: Узел не передан в маске Type 18 (Grid)";
-      // } else if (!foundInObs) {
-      //    status = "ОШИБКА: Нет данных задержки в Type 26 (Obs)";
-      // } else if (isExpired) {
-      //    status = "ОШИБКА: Type 26 протух или из будущего (Time mismatch)";
-      // } else if (isDoNotUse) {
-      //    status = "ОТКАЗ: Флаг doNotUse = true (GIVEI=15)";
-      // } else { status = "УСПЕХ: Узел добавлен!"; }
-
-      // qDebug().noquote() << QString("  Угол [%1, %2] -> %3")
-      //    .arg(qRadiansToDegrees(cand.first),  0, 'f', 2)
-      //    .arg(qRadiansToDegrees(cand.second), 0, 'f', 2)
-      //    .arg(status);
+      Q_UNUSED(foundInGrid);
+      Q_UNUSED(foundInObs);
+      Q_UNUSED(isExpired);
+      Q_UNUSED(isDoNotUse);
    }
+
    return outCorners.size();
 }
 
-bool SBASCorrectionStore::ionoVerticalAt(double ippLat, double ippLon, const QDateTime& t, double& vdelay_m, double& var_v_m2) const {
-   vdelay_m = 0.0; var_v_m2 = qQNaN();
+bool SBASCorrectionStore::ionoVerticalAt(double           ippLat,
+                                         double           ippLon,
+                                         const QDateTime& t,
+                                         double&          vdelay_m,
+                                         double&          var_v_m2) const {
+   vdelay_m = 0.0;
+   var_v_m2 = qQNaN();
 
    auto grid = getActiveGrid(t);
 
@@ -795,8 +1275,10 @@ bool SBASCorrectionStore::ionoVerticalAt(double ippLat, double ippLon, const QDa
 
    if (n >= 1) {
       for (const auto& e : c) {
-         if ((std::fabs(e.lat_rad - ippLat) <= 1e-10) && (std::fabs(angDiffRad(e.lon_rad, ippLon)) <= 1e-10)) {
-            vdelay_m = e.vdelay_m; var_v_m2 = e.sigma_v_m2;
+         if ((std::fabs(e.lat_rad - ippLat) <= 1e-10) &&
+             (std::fabs(angDiffRad(e.lon_rad, ippLon)) <= 1e-10)) {
+            vdelay_m = e.vdelay_m;
+            var_v_m2 = e.sigma_v_m2;
             return true;
          }
       }
@@ -810,7 +1292,8 @@ bool SBASCorrectionStore::ionoVerticalAt(double ippLat, double ippLon, const QDa
       double lat_min = 1e9, lat_max = -1e9;
 
       for (const auto& e : c) {
-         lat_min = qMin(lat_min, e.lat_rad); lat_max = qMax(lat_max, e.lat_rad);
+         lat_min = qMin(lat_min, e.lat_rad);
+         lat_max = qMax(lat_max, e.lat_rad);
       }
 
       QVector<IonoObs> bottom, top;
@@ -818,7 +1301,9 @@ bool SBASCorrectionStore::ionoVerticalAt(double ippLat, double ippLon, const QDa
       for (const auto& e : c) {
          if (std::fabs(e.lat_rad - lat_min) < 1e-9) {
             bottom.push_back(e);
-         } else { top.push_back(e); }
+         } else {
+            top.push_back(e);
+         }
       }
 
       if ((bottom.size() != 2) || (top.size() != 2)) {
@@ -830,7 +1315,9 @@ bool SBASCorrectionStore::ionoVerticalAt(double ippLat, double ippLon, const QDa
                              std::swap(row[0], row[1]);
                           }
                        };
-      sortByLon(bottom); sortByLon(top);
+
+      sortByLon(bottom);
+      sortByLon(top);
 
       IonoObs c11 = bottom[0], c21 = bottom[1], c12 = top[0], c22 = top[1];
 
@@ -854,6 +1341,7 @@ bool SBASCorrectionStore::ionoVerticalAt(double ippLat, double ippLon, const QDa
       auto area = [](double x1, double y1, double x2, double y2, double x3, double y3) {
                      return std::fabs((x1 * (y2 - y3) + x2 * (y3 - y1) + x3 * (y1 - y2)) / 2.0);
                   };
+
       double x1 = 0, y1 = 0;
       double x2 = normLonRad(c[1].lon_rad - c[0].lon_rad), y2 = c[1].lat_rad - c[0].lat_rad;
       double x3 = normLonRad(c[2].lon_rad - c[0].lon_rad), y3 = c[2].lat_rad - c[0].lat_rad;
@@ -873,73 +1361,53 @@ bool SBASCorrectionStore::ionoVerticalAt(double ippLat, double ippLon, const QDa
       var_v_m2 = w1 * c[0].sigma_v_m2 + w2 * c[1].sigma_v_m2 + w3 * c[2].sigma_v_m2;
       return true;
    }
+
    return false;
 }
 
 std::optional<double> SBASCorrectionStore::giveVar_m2(double ippLat, double ippLon, const QDateTime& t) const {
-   double bestD = std::numeric_limits<double>::max(), best = -1;
+   double bestD = std::numeric_limits<double>::max();
+   double best  = -1;
 
    for (const auto& o : ionoObs_) {
       if ((t >= o.start) && (t < o.end)) {
          if (double d = haversine(ippLat, ippLon, o.lat_rad, o.lon_rad); (d < bestD)) {
-            bestD = d; best = o.sigma_v_m2;
+            bestD = d;
+            best  = o.sigma_v_m2;
          }
       }
    }
+
    return best >= 0 ? std::optional<double> (best) : std::nullopt;
 }
 
 std::optional<double> SBASCorrectionStore::giveVDelay_m(double ippLat, double ippLon, const QDateTime& t) const {
-   double bestD = std::numeric_limits<double>::max(), best = -1;
+   double bestD = std::numeric_limits<double>::max();
+   double best  = -1;
 
    for (const auto& o : ionoObs_) {
       if ((t >= o.start) && (t < o.end)) {
          if (double d = haversine(ippLat, ippLon, o.lat_rad, o.lon_rad); (d < bestD)) {
-            bestD = d; best = o.vdelay_m;
+            bestD = d;
+            best  = o.vdelay_m;
          }
       }
    }
+
    return best >= 0 ? std::optional<double> (best) : std::nullopt;
 }
 
 std::optional<LongTermCorrectionEntry> SBASCorrectionStore::getLongTermCorrection(const Satellite& sat, const QDateTime& t) const {
-   struct Cand { LongTermCorrectionEntry e; int score; qint64 ts; bool hasVel; bool from24; };
-   QVector<Cand> cs;
-   auto fast = fastIodp(sat, t);
-
-   if (auto it = longTermBySat_.find(sat); (it != longTermBySat_.end())) {
-      for (const auto& e : it.value()) {
-         if ((t >= e.start) && (t < e.end)) {
-            int sc = (fast && e.iodp >= 0) ? (*fast == e.iodp ? 2 : 0) : (e.iodp >= 0 ? 1 : 0);
-            cs.push_back({ e, sc, e.start.toSecsSinceEpoch(), e.hasVelocity, e.source == LongTermCorrectionEntry::Source::From24 });
-         }
-      }
+   if (const auto* e = selectedLongTermEntry(sat, t)) {
+      return *e;
    }
-
-   if (cs.isEmpty()) {
-      return std::nullopt;
-   }
-   std::sort(cs.begin(), cs.end(), [](const Cand& a, const Cand& b){
-      if (a.score != b.score) {
-         return a.score > b.score;
-      }
-
-      if (a.ts != b.ts) {
-         return a.ts > b.ts;
-      }
-
-      if (a.hasVel != b.hasVel) {
-         return a.hasVel;
-      }
-      return a.from24;
-   });
-   return cs.front().e;
+   return std::nullopt;
 }
 
 std::optional<double> SBASCorrectionStore::gpsGlonassOffset(const QDateTime& t) const {
    for (const auto& iv : gpsGloOffsets_) {
       if ((t >= iv.start) && (t < iv.end)) {
-         return iv.gpsMinusGlonass_s;
+         return iv.rawDeltaAGlonass_s;
       }
    }
    return std::nullopt;

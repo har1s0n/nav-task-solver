@@ -20,10 +20,10 @@ public:
    explicit GridGenerator(double          lonStepDeg = 1.0,
                           ELLIPSOID::TYPE ellipsoid  = ELLIPSOID::TYPE::PZ90_11);
 
-   QVector<GRID_POINT> generateGrid(double minLat = 61.0348,
-                                    double maxLat = 61.0348,
-                                    double minLon = 69.0651,
-                                    double maxLon = 69.0651) const;
+   QVector<GRID_POINT> generateGrid(double minLat = 55.160279,
+                                    double maxLat = 55.160279,
+                                    double minLon = 61.401372,
+                                    double maxLon = 61.401372) const;
 
    QVector<GRID_POINT> generateGridLAEA(double minLat = 57.0,
                                         double maxLat = 61.0,
