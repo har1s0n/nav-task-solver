@@ -427,10 +427,10 @@ void SBASCorrectionStore::buildTimelines() {
       TimeOffsetInterval iv;
       iv.start = m->recvTime;
       iv.end   = (i + 1 < netMsgs.size() && netMsgs[i + 1])
-                        ? netMsgs[i + 1]->recvTime
-                        : (maxRecv.isValid()
-                               ? maxRecv.addSecs(1)
-                               : m->recvTime.addSecs(1));
+                     ? netMsgs[i + 1]->recvTime
+                     : (maxRecv.isValid()
+                            ? maxRecv.addSecs(1)
+                            : m->recvTime.addSecs(1));
       iv.rawDeltaAGlonass_s = m->deltaAGlonassCandidate_s;
 
       gpsGloOffsets_.push_back(iv);
@@ -1165,10 +1165,10 @@ int SBASCorrectionStore::findCellCorners(const QVector<ActiveNode>& grid,
    }
 
    QVector<QPair<double, double> > candidates = {
-      { lat_floor, lo1                                                                                  },
-      { lat_floor, lo2                                                                                  },
-      { lat_ceil,  lo3                                                                                  },
-      { lat_ceil,  lo4                                                                                  }
+      { lat_floor, lo1                                                                                    },
+      { lat_floor, lo2                                                                                    },
+      { lat_ceil,  lo3                                                                                    },
+      { lat_ceil,  lo4                                                                                    }
    };
 
    for (const auto& cand : candidates) {

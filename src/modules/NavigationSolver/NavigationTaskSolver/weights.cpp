@@ -137,7 +137,11 @@ WeightModel::BuildResult WeightModel::buildRDiagonal(const QDateTime& epoch, con
       const double sigma2_air   = qPow(cfg_.sigmaReceiver_m, 2) + qPow(sigmaMultipath(g.elevation_deg), 2);
 
       // --- Total ---
-      double sigma2 = sigma2_udre + sigma2_iono + sigma2_tropo + sigma2_air;
+      double sigma2 = sigma2_udre + sigma2_air; // Базовая дисперсия эфемерид и шума приемника
+
+      if (!cfg_.assessSISREonly) {
+         sigma2 += (sigma2_iono + sigma2_tropo);
+      }
 
       if (!qIsFinite(sigma2) || (sigma2 <= 0.0)) {
          out.rej.badSigma2 += 1; out.rejected.push_back(g.sat);

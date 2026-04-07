@@ -14,7 +14,8 @@ bool Application::initialize(const ApplicationConfig& config) {
    // 1) Модуль загрузки всех IO-данных
    io::DataManager::Config ioCfg{
       cfg_.sp3Path,
-      cfg_.rinexNavPath,
+      cfg_.rinexNavGlonassPath,
+      cfg_.rinexNavGpsPath,
       cfg_.sbasPath,
       io::SourceType::FILE_CSV,
       cfg_.dcbPath
@@ -49,20 +50,23 @@ int Application::run() {
       }
 
       if (!epochsPrepared) {
-         const auto* navPtr = (ctx_.dm ? ctx_.dm->getRinexFile() : nullptr);
          const auto* sp3Ptr = (ctx_.dm ? ctx_.dm->getSP3File() : nullptr);
+         const auto* navGlo = (ctx_.dm ? ctx_.dm->getRinexGlonassFile() : nullptr);
+         const auto* navGps = (ctx_.dm ? ctx_.dm->getRinexGpsFile() : nullptr);
 
-         if (navPtr && sp3Ptr) {
+         if (sp3Ptr) {
             const auto epochsSp3 = extractEpochs(sp3Ptr);
-            const auto epochsNav = extractEpochs(navPtr);
+            const auto epochsGlo = extractEpochs(navGlo);
+            const auto epochsGps = extractEpochs(navGps);
 
-            ctx_.allowedEpochs = intersectEpochs(epochsSp3, epochsNav);
+            ctx_.allowedEpochs = epochsSp3;
             epochsPrepared     = true;
 
             qDebug() << "[Application] epochs prepared:"
-                     << "sp3=" << epochsSp3.size()
-                     << "nav=" << epochsNav.size()
-                     << "intersection=" << ctx_.allowedEpochs.size();
+                     << "sp3="    << epochsSp3.size()
+                     << "navGlo=" << epochsGlo.size()
+                     << "navGps=" << epochsGps.size()
+                     << "allowed=" << ctx_.allowedEpochs.size();
          }
       }
 

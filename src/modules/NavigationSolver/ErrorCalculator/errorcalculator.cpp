@@ -199,6 +199,28 @@ static inline bool passesGlonassLtApplicability(const rinex::NAV_RECORD&        
    return pass;
 }
 
+static inline bool passesGpsLtApplicability(const rinex::NAV_RECORD&           navRec,
+                                            const io::LongTermCorrectionEntry& lt,
+                                            Stats&                             st) {
+   ++st.ltNavCandidates;
+
+   const int iode  = qRound(navRec.IODE);
+   const int iodc8 = qRound(navRec.IODC) & 0xFF;
+
+   const bool pass = (lt.iod == iode) && (lt.iod == iodc8);
+
+   if (pass) {
+      ++st.ltNavCompatible;
+      ++st.ltNavSelected;
+   } else {
+      ++st.ltNavRejected;
+      ++st.ltNavFallback;
+      ++st.satsLtSuppressed;
+   }
+
+   return pass;
+}
+
 bool navsolver::ErrorCalculator::execute(pipeline::Context& ctx) {
    if (!ctx.dm || ctx.gridPoints.isEmpty() || ctx.visibleSats.isEmpty()) {
       qWarning() << "[ErrorCalculator] Недостаточно данных для расчета.";
@@ -305,9 +327,15 @@ void navsolver::ErrorCalculator::computeResidualErrors(pipeline::Context& ctx) {
             auto prc = sbas.fastPrc_m(sat, epoch);
             auto lt  = sbas.getLongTermCorrection(sat, epoch);
 
-            if (lt && (sat.getSystem() == SatelliteSystem::TYPE::GLONASS)) {
-               if (!passesGlonassLtApplicability(navRec, *lt, st)) {
-                  lt.reset();
+            if (lt) {
+               if (sat.getSystem() == SatelliteSystem::TYPE::GLONASS) {
+                  if (!passesGlonassLtApplicability(navRec, *lt, st)) {
+                     lt.reset();
+                  }
+               } else if (sat.getSystem() == SatelliteSystem::TYPE::GPS) {
+                  if (!passesGpsLtApplicability(navRec, *lt, st)) {
+                     lt.reset();
+                  }
                }
             }
 
@@ -357,7 +385,43 @@ void navsolver::ErrorCalculator::computeResidualErrors(pipeline::Context& ctx) {
                d_sp3_nav.z * los.z;
 
             const double clkSp3L1 = correctSp3ClockL3toL1(ctx, sat, epoch, sp3Rec.clock, &st.dcbMissing);
-            const double clkNavL1 = computeBroadcastClockL1(sat, navRec.clock, epoch);
+            const double clkNavL1 = computeBroadcastClockL1(sat, navRec, epoch);
+
+            // ####
+            if (sat.getSystem() == SatelliteSystem::TYPE::GPS) {
+               const double toc = secondsOfWeek(navRec.clock.epoch);
+               const double tow = secondsOfWeek(epoch);
+               const double dt  = wrapWeek(tow - toc);
+
+               qDebug().noquote()
+                  << QString("[EC][GPS_CLK] epoch=%1 sat=G%2 toc=%3 tow=%4 dt=%5 "
+                             "af0=%6 af1=%7 af2=%8 TGD=%9 clkNav=%10")
+                  .arg(epoch.toString(Qt::ISODate))
+                  .arg(sat.getNumber(),               2, 10,  QChar('0'))
+                  .arg(toc,                           0, 'f', 3)
+                  .arg(tow,                           0, 'f', 3)
+                  .arg(dt,                            0, 'f', 3)
+                  .arg(navRec.clock.svClockBias,      0, 'e', 12)
+                  .arg(navRec.clock.svClockDrift,     0, 'e', 12)
+                  .arg(navRec.clock.svClockDriftRate, 0, 'e', 12)
+                  .arg(navRec.TGD,                    0, 'e', 12)
+                  .arg(clkNavL1,                      0, 'e', 12);
+            }
+
+            if ((sat.getSystem() == SatelliteSystem::TYPE::GPS) && lt) {
+               const int iode  = qRound(navRec.IODE);
+               const int iodc8 = qRound(navRec.IODC) & 0xFF;
+
+               qDebug().noquote()
+                  << QString("[EC][GPS_LT_CHECK] epoch=%1 sat=G%2 ltIod=%3 iode=%4 iodc8=%5")
+                  .arg(epoch.toString(Qt::ISODate))
+                  .arg(sat.getNumber(), 2, 10, QChar('0'))
+                  .arg(lt->iod)
+                  .arg(iode)
+                  .arg(iodc8);
+            }
+            // ###
+
             deltaSp3_m -= constants::PZ_9011::c * (clkSp3L1 - clkNavL1);
 
             const bool   hasFast    = prc.has_value();
@@ -394,10 +458,25 @@ void navsolver::ErrorCalculator::computeResidualErrors(pipeline::Context& ctx) {
                dt_lt_m  = evaluateLtClockMeters(*lt, ltDeltaSec);
             }
 
-            // Сохраняем текущую внутреннюю знаковую конвенцию проекта:
-            // полная СДКМ-коррекция = LT-part - PRC.
+            double rrc_m = 0.0;
+
+            if (hasFast) {
+               auto fp = sbas.fastCurrentPrevious(sat, epoch);
+
+               if (fp && qIsFinite(fp->current.prc_m) && qIsFinite(fp->previous.prc_m)) {
+                  const double dt_fast = fp->previous.recvTime.secsTo(fp->current.recvTime);
+
+                  if (std::abs(dt_fast) > 0.5) {
+                     const double rrc      = (fp->current.prc_m - fp->previous.prc_m) / dt_fast;
+                     const double dt_apply = fp->current.recvTime.secsTo(epoch);
+                     rrc_m = rrc * dt_apply;
+                  }
+               }
+            }
+
             const double deltaSdcm_m =
-               hasAnySbas ? ((hasLt ? (dr_los_m - dt_lt_m) : 0.0) - prc_m) : qQNaN();
+               hasAnySbas ? ((hasLt ? (dr_los_m - dt_lt_m) : 0.0) - prc_m - rrc_m)
+                           : qQNaN();
 
             const double residualRaw_m =
                hasAnySbas ? (deltaSp3_m - deltaSdcm_m) : qQNaN();
@@ -442,6 +521,14 @@ void navsolver::ErrorCalculator::computeResidualErrors(pipeline::Context& ctx) {
          QVector<ResidualError> result;
          result.reserve(temp.size());
 
+         if (gpsResidualCount > 0) {
+            qDebug().noquote()
+               << QString("[EC][MASTER_CLK] epoch=%1 deltaClk_m=%2 gpsCount=%3")
+               .arg(epoch.toString(Qt::ISODate))
+               .arg(deltaClk_m, 0, 'f', 4)
+               .arg(gpsResidualCount);
+         }
+
          for (const auto& tr : temp) {
             if (qIsFinite(tr.residualRaw)) {
                ++st.residualRawFinite;
@@ -455,6 +542,19 @@ void navsolver::ErrorCalculator::computeResidualErrors(pipeline::Context& ctx) {
 
             if (qIsFinite(residualFinal_m)) {
                ++st.residualFinalFinite;
+            }
+
+            if ((tr.sat.getSystem() == SatelliteSystem::TYPE::GLONASS) &&
+                ((tr.sat.getNumber() == 7) || (tr.sat.getNumber() == 13) ||
+                 (tr.sat.getNumber() == 14) || (tr.sat.getNumber() == 17))) {
+               qDebug().noquote()
+                  << QString("[EC][FINAL] epoch=%1 sat=R%2 "
+                             "residualRaw=%3 deltaClk=%4 residualFinal=%5")
+                  .arg(epoch.toString(Qt::ISODate))
+                  .arg(tr.sat.getNumber(), 2, 10,  QChar('0'))
+                  .arg(tr.residualRaw,     0, 'f', 4)
+                  .arg(deltaClk_m,         0, 'f', 4)
+                  .arg(residualFinal_m,    0, 'f', 4);
             }
 
             result.append(ResidualError{
@@ -570,13 +670,32 @@ double navsolver::ErrorCalculator::computeBroadcastClockL1_GLO(const rinex::R_TI
           0.5 * tr.svClockDriftRate * dt * dt;
 }
 
-double navsolver::ErrorCalculator::computeBroadcastClockL1(const Satellite&     sat,
-                                                           const rinex::R_TIME& tr,
-                                                           const QDateTime&     epoch) {
+double navsolver::ErrorCalculator::computeBroadcastClockL1_GPS(const rinex::NAV_RECORD& navRec, const QDateTime& epoch) {
+   const auto& tr = navRec.clock;
+
+   const double toc = secondsOfWeek(tr.epoch);
+   const double tow = secondsOfWeek(epoch);
+   const double dt  = wrapWeek(tow - toc);
+
+   const double clkL1 =
+      tr.svClockBias +
+      tr.svClockDrift * dt +
+      tr.svClockDriftRate * dt * dt;
+
+   return clkL1 - navRec.TGD;
+}
+
+double navsolver::ErrorCalculator::computeBroadcastClockL1(const Satellite&         sat,
+                                                           const rinex::NAV_RECORD& navRec,
+                                                           const QDateTime&         epoch) {
    switch (sat.getSystem()) {
      case SatelliteSystem::TYPE::GLONASS:
-        return computeBroadcastClockL1_GLO(tr, epoch);
+        return computeBroadcastClockL1_GLO(navRec.clock, epoch);
+
+     case SatelliteSystem::TYPE::GPS:
+        return computeBroadcastClockL1_GPS(navRec, epoch);
+
      default:
-        return tr.svClockBias;
+        return navRec.clock.svClockBias;
    }
 }

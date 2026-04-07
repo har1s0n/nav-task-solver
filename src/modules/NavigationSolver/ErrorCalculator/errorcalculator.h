@@ -33,9 +33,12 @@ private:
    double computeBroadcastClockL1_GLO(const  rinex::R_TIME& tr,
                                       const QDateTime&      epoch);
 
-   double computeBroadcastClockL1(const Satellite&      sat,
-                                  const  rinex::R_TIME& tr,
-                                  const QDateTime&      epoch);
+   double computeBroadcastClockL1_GPS(const rinex::NAV_RECORD& navRec,
+                                      const QDateTime&         epoch);
+
+   double computeBroadcastClockL1(const Satellite&         sat,
+                                  const rinex::NAV_RECORD& navRec,
+                                  const QDateTime&         epoch);
 
    // Удобная обёртка для вычитания времени (секунды от начала недели)
    inline double secondsOfWeek(const QDateTime& tUtc) {

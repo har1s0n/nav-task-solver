@@ -16,7 +16,8 @@ public:
 
    struct Config {
       QString    sp3Path;
-      QString    rinexNavPath;
+      QString    rinexNavGlonassPath;
+      QString    rinexNavGpsPath;
       QString    sbasPath;
       SourceType sbasSourceType = SourceType::FILE_CSV;
       QString    dcbPath;
@@ -27,13 +28,9 @@ public:
       return QStringLiteral("Загрузка IO-данных");
    }
 
-   bool                       loadSP3(const QString& path);
-   bool                       loadRinexNav(const QString& path);
-   bool                       loadSBASCorrections(const QString& path,
-                                                  SourceType     sourceType);
-   bool                       loadDCB(const QString& path);
-
    const sp3::SP3_FILE*       getSP3File()const noexcept;
+   const rinex::RINEX_FILE*   getRinexGlonassFile() const noexcept;
+   const rinex::RINEX_FILE*   getRinexGpsFile() const noexcept;
    const rinex::RINEX_FILE*   getRinexFile()const noexcept;
    const SBASCorrectionStore &getSBASStore() const noexcept;
    io::SBASCorrectionStore &  sbasStore() noexcept;
@@ -41,6 +38,13 @@ public:
 
 private:
 
+   bool loadSP3(const QString& path);
+   bool loadRinexNav(const QString&                      path,
+                     std::unique_ptr<rinex::RINEX_FILE>& dst,
+                     const char*                         tag);
+   bool loadSBASCorrections(const QString& path,
+                            SourceType     sourceType);
+   bool loadDCB(const QString& path);
    bool fileExists(const QString& path) const noexcept;
 
    void applyLeapSecondShiftToSP3(sp3::SP3_FILE& sp3,
@@ -50,7 +54,8 @@ private:
 
    Config cfg_;
    std::unique_ptr<sp3::SP3_FILE> sp3File_;
-   std::unique_ptr<rinex::RINEX_FILE> rinexFile_;
+   std::unique_ptr<rinex::RINEX_FILE> rinexGlonassFile_;
+   std::unique_ptr<rinex::RINEX_FILE> rinexGpsFile_;
    SBASCorrectionStore sbasStore_;
    std::unordered_map<Satellite, double> glonassDcbL3L1_;
 };

@@ -5,7 +5,8 @@
 
 struct ApplicationConfig {
    QString sp3Path;
-   QString rinexNavPath;
+   QString rinexNavGlonassPath;
+   QString rinexNavGpsPath;
    QString sbasPath;
    QString dcbPath;
 

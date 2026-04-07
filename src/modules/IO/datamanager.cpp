@@ -15,8 +15,15 @@ bool DataManager::execute(pipeline::Context& ctx) {
       return false;
    }
 
-   if (!loadRinexNav(cfg_.rinexNavPath)) {
-      qCritical() << name() << ": не удалось загрузить RINEX NAV:" << cfg_.rinexNavPath;
+   if (!loadRinexNav(cfg_.rinexNavGlonassPath, rinexGlonassFile_, "GLONASS")) {
+      qCritical() << name() << ": не удалось загрузить RINEX NAV (GLONASS):"
+                  << cfg_.rinexNavGlonassPath;
+      return false;
+   }
+
+   if (!loadRinexNav(cfg_.rinexNavGpsPath, rinexGpsFile_, "GPS")) {
+      qCritical() << name() << ": не удалось загрузить RINEX NAV (GPS):"
+                  << cfg_.rinexNavGpsPath;
       return false;
    }
 
@@ -94,6 +101,11 @@ void DataManager::applyLeapSecondShiftToSP3(sp3::SP3_FILE& sp3, int leapSeconds)
 
       // Проходим по всем спутникам в текущую эпоху
       for (const Satellite& sat : sp3.records[currentEpoch].keys()) {
+         if (sat.getSystem() != SatelliteSystem::TYPE::GLONASS) {
+            // SP3 для GPS уже в GPS Time — копируем без интерполяции
+            newEpochRecords.insert(sat, sp3.records[currentEpoch][sat]);
+            continue;
+         }
          QVector<QDateTime> satTimes;
          QVector<COORD_XYZ> satCoords;
 
@@ -194,26 +206,45 @@ const sp3::SP3_FILE*DataManager::getSP3File() const noexcept {
    return sp3File_.get();
 }
 
-bool DataManager::loadRinexNav(const QString& path) {
+bool DataManager::loadRinexNav(const QString&                      path,
+                               std::unique_ptr<rinex::RINEX_FILE>& dst,
+                               const char*                         tag) {
    if (!fileExists(path)) {
-      qWarning() << "RINEX NAV file not found:" << path;
-      rinexFile_.reset();
+      qWarning() << "RINEX NAV file not found:" << tag << path;
+      dst.reset();
       return false;
    }
-   QFileInfo info(path);
+
+   QFileInfo info(path.trimmed());
    auto rinexFile = std::make_unique<rinex::RINEX_FILE>();
 
-   if (rinex::RinexReader::parse(info.path(), info.fileName(), *rinexFile) != rinex::PARSE_RESULT::SUCCESS) {
-      qWarning() << "Failed to parse RINEX NAV:" << path;
+   if (rinex::RinexReader::parse(info.path(), info.fileName(), *rinexFile)
+       != rinex::PARSE_RESULT::SUCCESS) {
+      qWarning() << "Failed to parse RINEX NAV:" << tag << path;
+      dst.reset();
       return false;
    }
-   rinexFile_ = std::move(rinexFile);
 
+   qInfo().noquote()
+      << QString("[DataManager][RINEX_LOAD] sys=%1 epochs=%2")
+      .arg(tag)
+      .arg(rinexFile->navRecords.size());
+
+   dst = std::move(rinexFile);
    return true;
 }
 
+const rinex::RINEX_FILE*DataManager::getRinexGlonassFile() const noexcept {
+   return rinexGlonassFile_.get();
+}
+
+const rinex::RINEX_FILE*DataManager::getRinexGpsFile() const noexcept {
+   return rinexGpsFile_.get();
+}
+
+// временная совместимость со старым кодом:
 const rinex::RINEX_FILE*DataManager::getRinexFile() const noexcept {
-   return rinexFile_.get();
+   return rinexGlonassFile_.get();
 }
 
 bool DataManager::loadSBASCorrections(const QString& path, SourceType sourceType) {

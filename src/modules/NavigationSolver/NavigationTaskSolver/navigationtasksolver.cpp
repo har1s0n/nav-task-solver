@@ -45,21 +45,29 @@ bool NavigationTaskSolver::execute(pipeline::Context& ctx) {
             COORD_XYZ satEcef = navOrig->navRecords.value(epoch).value(res.satellite).coord;
 
             // Приведение км -> м
-            double norm = std::sqrt(satEcef.x * satEcef.x + satEcef.y * satEcef.y + satEcef.z * satEcef.z);
+            const double norm = std::sqrt(satEcef.x * satEcef.x +
+                                          satEcef.y * satEcef.y +
+                                          satEcef.z * satEcef.z);
 
             if (std::isfinite(norm) && (norm > 1e3) && (norm < 1e6)) {
-               satEcef.x *= 1000.0; satEcef.y *= 1000.0; satEcef.z *= 1000.0;
+               satEcef.x *= 1000.0;
+               satEcef.y *= 1000.0;
+               satEcef.z *= 1000.0;
             }
+
             satInputs.push_back({ res.satellite, satEcef });
          }
 
          GeometryBuilder geomBuilder(cfg_.geomCfg);
-         auto geoms        = geomBuilder.compute(point, satInputs);
-         auto weightResult = weightModel.buildRDiagonal(epoch, point, geoms);
+         const auto geoms        = geomBuilder.compute(point, satInputs);
+         const auto weightResult = weightModel.buildRDiagonal(epoch, point, geoms);
 
-         // 2. Формирование двух матриц наблюдений
-         QVector<LeastSquaresSolver::Observation> absObs;  // Абсолютный (без поправок)
-         QVector<LeastSquaresSolver::Observation> sbasObs; // СДКМ (с весами)
+         // 2. Формирование двух наборов наблюдений
+         QVector<LeastSquaresSolver::Observation> absObs;  // Абсолютный режим
+         QVector<LeastSquaresSolver::Observation> sbasObs; // Режим СДКМ/WLS
+
+         absObs.reserve(geoms.size());
+         sbasObs.reserve(geoms.size());
 
          for (const auto& geom : geoms) {
             auto itRes = std::find_if(residuals.constBegin(), residuals.constEnd(),
@@ -71,30 +79,44 @@ bool NavigationTaskSolver::execute(pipeline::Context& ctx) {
                continue;
             }
 
-            // Наблюдение для абсолютного режима
-            LeastSquaresSolver::Observation oAbs;
-            oAbs.H[0] = -geom.los.x; oAbs.H[1] = -geom.los.y;
-            oAbs.H[2] = -geom.los.z; oAbs.H[3] = 1.0;
-            oAbs.y    = itRes->deltaSp3; // Чистая разница SP3 - NAV
-            absObs.push_back(oAbs);
+            LeastSquaresSolver::Observation base;
+            base.H[0] = -geom.los.x;
+            base.H[1] = -geom.los.y;
+            base.H[2] = -geom.los.z;
+            base.H[3] = 1.0;
 
-            // Наблюдение для СДКМ (поиск весов)
-            if (qIsFinite(itRes->residual)) {
-               auto itWeight = std::find_if(weightResult.weights.constBegin(), weightResult.weights.constEnd(),
-                                            [&geom](const WeightModel::SatWeight& w) {
-                  return w.sat == geom.sat;
-               });
-
-               if ((itWeight != weightResult.weights.constEnd()) && qIsFinite(itWeight->sigma2_m2)) {
-                  LeastSquaresSolver::Observation oSbas = oAbs;
-                  oSbas.y      = itRes->residual; // Остаточная ошибка
-                  oSbas.sigma2 = itWeight->sigma2_m2;
-                  sbasObs.push_back(oSbas);
-               }
+            // Абсолютный режим: deltaSp3
+            if (qIsFinite(itRes->deltaSp3)) {
+               LeastSquaresSolver::Observation oAbs = base;
+               oAbs.y = itRes->deltaSp3;
+               absObs.push_back(oAbs);
             }
+
+            // Режим СДКМ/WLS: residual + sigma2
+            if (!qIsFinite(itRes->residual)) {
+               continue;
+            }
+
+            auto itWeight = std::find_if(weightResult.weights.constBegin(), weightResult.weights.constEnd(),
+                                         [&geom](const WeightModel::SatWeight& w) {
+               return w.sat == geom.sat;
+            });
+
+            if (itWeight == weightResult.weights.constEnd()) {
+               continue;
+            }
+
+            if (!qIsFinite(itWeight->sigma2_m2) || (itWeight->sigma2_m2 <= 0.0)) {
+               continue;
+            }
+
+            LeastSquaresSolver::Observation oSbas = base;
+            oSbas.y      = itRes->residual;
+            oSbas.sigma2 = qMax(itWeight->sigma2_m2, cfg_.weightCfg.minSigma2_m2);
+            sbasObs.push_back(oSbas);
          }
 
-         // 3. Функция-хелпер для решения и заполнения NavSolution
+         // 3. Хелпер решения
          auto solveMode = [&](const QVector<LeastSquaresSolver::Observation>& obs,
                               const LeastSquaresSolver::Options& opt) -> NavSolution {
                              NavSolution sol;
@@ -103,43 +125,49 @@ bool NavigationTaskSolver::execute(pipeline::Context& ctx) {
                                 return sol;
                              }
 
-                             auto res = LeastSquaresSolver::solve(obs, opt);
+                             const auto res = LeastSquaresSolver::solve(obs, opt);
+
                              sol.num_sats  = res.success ? res.m : 0;
                              sol.converged = res.success;
 
-                             if (res.success) {
-                                sol.delta_pos_ecef = { res.dx[0], res.dx[1], res.dx[2] };
-                                sol.delta_clk_s    = res.dx[3] / 299792458.0;
-                                sol.postfit_rms    = res.postfit_rms;
-                                sol.err3d          = std::sqrt(res.dx[0] * res.dx[0] + res.dx[1] * res.dx[1] + res.dx[2] * res.dx[2]);
-
-                                auto R_enu     = GeometryBuilder::rotationEcefToEnu(point.llh);
-                                COORD_ENU denu = GeometryBuilder::apply(R_enu, sol.delta_pos_ecef);
-                                sol.horiz_err = std::sqrt(denu.east * denu.east + denu.north * denu.north);
-                                sol.vert_err  = std::abs(denu.up);
-                                sol.dop       = computeDop(obs, point);
+                             if (!res.success) {
+                                return sol;
                              }
+
+                             sol.delta_pos_ecef = { res.dx[0], res.dx[1], res.dx[2] };
+                             sol.delta_clk_s    = res.dx[3] / 299792458.0;
+                             sol.postfit_rms    = res.postfit_rms;
+                             sol.err3d          = std::sqrt(res.dx[0] * res.dx[0] +
+                                                            res.dx[1] * res.dx[1] +
+                                                            res.dx[2] * res.dx[2]);
+
+                             const auto R_enu     = GeometryBuilder::rotationEcefToEnu(point.llh);
+                             const COORD_ENU denu = GeometryBuilder::apply(R_enu, sol.delta_pos_ecef);
+
+                             sol.horiz_err = std::sqrt(denu.east * denu.east + denu.north * denu.north);
+                             sol.vert_err  = std::abs(denu.up);
+                             sol.dop       = computeDop(obs, point);
+
                              return sol;
                           };
 
+         // 4. Решение двух штатных режимов
          DualNavSolution dSol;
-         // Обычный ГЛОНАСС (OLS)
-         dSol.absMode = solveMode(absObs, cfg_.olsOpt);
-         // СДКМ (WLS)
+         dSol.absMode  = solveMode(absObs, cfg_.olsOpt);
          dSol.sbasMode = solveMode(sbasObs, cfg_.wlsOpt);
 
          dualSolutions[epoch][point] = dSol;
 
-         // Оставляем в контексте СДКМ-решение для других модулей (если нужно)
+         // В контекст отдаём приоритетно решение СДКМ, иначе фолбэк на абсолютное
          if (dSol.sbasMode.converged) {
             ctx.solutions[epoch][point] = dSol.sbasMode;
          } else if (dSol.absMode.converged) {
-            ctx.solutions[epoch][point] = dSol.absMode; // Фолбэк
+            ctx.solutions[epoch][point] = dSol.absMode;
          }
       }
    }
 
-   // 4. Экспорт двойного CSV
+   // 5. Экспорт двойного CSV
    if (cfg_.writeCsv) {
       QFile file(cfg_.csvPath);
 
@@ -151,7 +179,6 @@ bool NavigationTaskSolver::execute(pipeline::Context& ctx) {
             for (auto itPoint = itEpoch.value().constBegin(); itPoint != itEpoch.value().constEnd(); ++itPoint) {
                const auto& sol = itPoint.value();
 
-               // Пишем только если сошелся хотя бы один режим
                if (!sol.absMode.converged && !sol.sbasMode.converged) {
                   continue;
                }
@@ -159,15 +186,12 @@ bool NavigationTaskSolver::execute(pipeline::Context& ctx) {
                out << itEpoch.key().toString(Qt::ISODate) << "\t"
                    << QString::number(itPoint.key().llh.latitude, 'f', 4) << "\t"
                    << QString::number(itPoint.key().llh.longitude, 'f', 4) << "\t"
-                   << QString::number(sol.absMode.converged ? sol.absMode.dop.PDOP : sol.sbasMode.dop.PDOP, 'f', 2) << "\t"
-
-                  // Абсолютные метрики
+                   << QString::number(sol.absMode.converged ? sol.absMode.dop.PDOP
+                                                                 : sol.sbasMode.dop.PDOP, 'f', 2) << "\t"
                    << sol.absMode.num_sats << "\t"
                    << (sol.absMode.converged ? QString::number(sol.absMode.err3d, 'f', 3) : "NaN") << "\t"
                    << (sol.absMode.converged ? QString::number(sol.absMode.horiz_err, 'f', 3) : "NaN") << "\t"
                    << (sol.absMode.converged ? QString::number(sol.absMode.vert_err, 'f', 3) : "NaN") << "\t"
-
-                  // СДКМ метрики
                    << sol.sbasMode.num_sats << "\t"
                    << (sol.sbasMode.converged ? QString::number(sol.sbasMode.err3d, 'f', 3) : "NaN") << "\t"
                    << (sol.sbasMode.converged ? QString::number(sol.sbasMode.horiz_err, 'f', 3) : "NaN") << "\t"

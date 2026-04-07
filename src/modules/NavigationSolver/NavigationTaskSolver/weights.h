@@ -23,8 +23,9 @@ public:
       double multipathB_m       = 0.53;
       double multipathScale_deg = 10.0;
 
-      bool requireUdre = true;
-      bool requireGive = false;
+      bool requireUdre     = true;
+      bool requireGive     = false;
+      bool assessSISREonly = false;
 
       double minSigma2_m2 = 1e-6;
    };
