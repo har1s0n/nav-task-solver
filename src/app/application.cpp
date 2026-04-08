@@ -59,7 +59,20 @@ int Application::run() {
             const auto epochsGlo = extractEpochs(navGlo);
             const auto epochsGps = extractEpochs(navGps);
 
-            ctx_.allowedEpochs = epochsSp3;
+            QVector<QDateTime> epochsFiltered;
+            epochsFiltered.reserve(epochsSp3.size());
+
+            if (!epochsSp3.isEmpty()) {
+               const QDate baseDate = epochsSp3.first().date();
+
+               for (const auto& t : epochsSp3) {
+                  if (t.date() == baseDate) {
+                     epochsFiltered.push_back(t);
+                  }
+               }
+            }
+
+            ctx_.allowedEpochs = epochsFiltered;
             epochsPrepared     = true;
 
             qDebug() << "[Application] epochs prepared:"

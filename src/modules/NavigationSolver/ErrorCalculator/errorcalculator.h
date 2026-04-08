@@ -39,29 +39,6 @@ private:
    double computeBroadcastClockL1(const Satellite&         sat,
                                   const rinex::NAV_RECORD& navRec,
                                   const QDateTime&         epoch);
-
-   // Удобная обёртка для вычитания времени (секунды от начала недели)
-   inline double secondsOfWeek(const QDateTime& tUtc) {
-      static const QDateTime gpsEpoch(QDate(1980, 1, 6), QTime(0, 0, 0), Qt::UTC);
-      const qint64 secs = gpsEpoch.secsTo(tUtc.toUTC());
-      const qint64 mod  = ((secs % 604800) + 604800) % 604800;
-
-      return static_cast<double> (mod);
-   }
-
-   inline double wrapWeek(double dt) {
-      // аккуратный анти-ролловер ±302400 c (половина недели)
-      const double HALF_WEEK = 302400.0;
-
-      if (dt >  HALF_WEEK) {
-         dt -= 2.0 * HALF_WEEK;
-      }
-
-      if (dt < -HALF_WEEK) {
-         dt += 2.0 * HALF_WEEK;
-      }
-      return dt;
-   }
 };
 }
 

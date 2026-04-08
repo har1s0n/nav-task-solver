@@ -1165,10 +1165,10 @@ int SBASCorrectionStore::findCellCorners(const QVector<ActiveNode>& grid,
    }
 
    QVector<QPair<double, double> > candidates = {
-      { lat_floor, lo1                                                                                    },
-      { lat_floor, lo2                                                                                    },
-      { lat_ceil,  lo3                                                                                    },
-      { lat_ceil,  lo4                                                                                    }
+      { lat_floor, lo1                                                                                       },
+      { lat_floor, lo2                                                                                       },
+      { lat_ceil,  lo3                                                                                       },
+      { lat_ceil,  lo4                                                                                       }
    };
 
    for (const auto& cand : candidates) {
@@ -1402,6 +1402,31 @@ std::optional<LongTermCorrectionEntry> SBASCorrectionStore::getLongTermCorrectio
       return *e;
    }
    return std::nullopt;
+}
+
+QVector<LongTermCorrectionEntry> SBASCorrectionStore::getAllActiveLongTermCorrections(const Satellite& sat, const QDateTime& t) const {
+   QVector<LongTermCorrectionEntry> result;
+   const auto maskIodp = activePrnMaskIodp(t);
+
+   auto it = longTermBySat_.find(sat);
+
+   if (it == longTermBySat_.end()) {
+      return result;
+   }
+
+   for (const auto& e : it.value()) {
+      if (!((t >= e.start) && (t < e.end))) {
+         continue;
+      }
+
+      if (maskIodp && (e.iodp >= 0) && (e.iodp != *maskIodp)) {
+         continue;
+      }
+
+      result.append(e);
+   }
+
+   return result;
 }
 
 std::optional<double> SBASCorrectionStore::gpsGlonassOffset(const QDateTime& t) const {

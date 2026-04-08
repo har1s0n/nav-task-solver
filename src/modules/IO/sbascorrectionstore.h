@@ -201,6 +201,8 @@ public:
    // ---- LONG-TERM ----
    std::optional<LongTermCorrectionEntry> getLongTermCorrection(const Satellite& sat,
                                                                 const QDateTime& t) const;
+   QVector<LongTermCorrectionEntry>       getAllActiveLongTermCorrections(const Satellite& sat,
+                                                                          const QDateTime& t) const;
 
    // ---- Time offsets ----
    std::optional<double> gpsGlonassOffset(const QDateTime& t) const;
