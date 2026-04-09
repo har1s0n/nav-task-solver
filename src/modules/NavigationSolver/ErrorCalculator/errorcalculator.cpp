@@ -179,6 +179,132 @@ static inline COORD_XYZ evaluateGpsBroadcastCoordKmAtTow(const rinex::NAV_RECORD
 }
 
 // ============================================================================
+// GLONASS state propagation
+// ============================================================================
+
+struct GloState {
+   double x;
+   double y;
+   double z;
+   double vx;
+   double vy;
+   double vz;
+};
+
+static inline GloState gloDerivatives(const GloState&  s,
+                                      const COORD_XYZ& luniSolarAcc) noexcept {
+   // Единицы: км, км/с, км/с^2
+   constexpr double MU    = 398600.44;   // км^3/с^2
+   constexpr double AE    = 6378.136;    // км
+   constexpr double J2    = 1.08262575e-3;
+   constexpr double OMEGA = 7.292115e-5; // рад/с
+
+   const double r2 = s.x * s.x + s.y * s.y + s.z * s.z;
+   const double r  = std::sqrt(r2);
+   const double r3 = r2 * r;
+   const double r5 = r3 * r2;
+   const double z2 = s.z * s.z;
+
+   const double kJ2 = 1.5 * J2 * MU * AE * AE / r5;
+   const double c   = 5.0 * z2 / r2;
+
+   const double ax =
+      -MU * s.x / r3
+      - kJ2 * s.x * (1.0 - c)
+      + OMEGA * OMEGA * s.x
+      + 2.0 * OMEGA * s.vy
+      + luniSolarAcc.x;
+
+   const double ay =
+      -MU * s.y / r3
+      - kJ2 * s.y * (1.0 - c)
+      + OMEGA * OMEGA * s.y
+      - 2.0 * OMEGA * s.vx
+      + luniSolarAcc.y;
+
+   const double az =
+      -MU * s.z / r3
+      - kJ2 * s.z * (3.0 - c)
+      + luniSolarAcc.z;
+
+   return GloState{
+      s.vx, s.vy, s.vz,
+      ax,   ay,   az
+   };
+}
+
+static inline GloState addScaled(const GloState& a,
+                                 const GloState& b,
+                                 double          scale) noexcept {
+   return GloState{
+      a.x  + b.x  * scale,
+      a.y  + b.y  * scale,
+      a.z  + b.z  * scale,
+      a.vx + b.vx * scale,
+      a.vy + b.vy * scale,
+      a.vz + b.vz * scale
+   };
+}
+
+static inline GloState rk4Step(const GloState&  s,
+                               const COORD_XYZ& luniSolarAcc,
+                               double           h) noexcept {
+   const GloState k1 = gloDerivatives(s, luniSolarAcc);
+   const GloState k2 = gloDerivatives(addScaled(s, k1, 0.5 * h), luniSolarAcc);
+   const GloState k3 = gloDerivatives(addScaled(s, k2, 0.5 * h), luniSolarAcc);
+   const GloState k4 = gloDerivatives(addScaled(s, k3, h),       luniSolarAcc);
+
+   GloState out = s;
+
+   out.x  += (h / 6.0) * (k1.x  + 2.0 * k2.x  + 2.0 * k3.x  + k4.x);
+   out.y  += (h / 6.0) * (k1.y  + 2.0 * k2.y  + 2.0 * k3.y  + k4.y);
+   out.z  += (h / 6.0) * (k1.z  + 2.0 * k2.z  + 2.0 * k3.z  + k4.z);
+   out.vx += (h / 6.0) * (k1.vx + 2.0 * k2.vx + 2.0 * k3.vx + k4.vx);
+   out.vy += (h / 6.0) * (k1.vy + 2.0 * k2.vy + 2.0 * k3.vy + k4.vy);
+   out.vz += (h / 6.0) * (k1.vz + 2.0 * k2.vz + 2.0 * k3.vz + k4.vz);
+   return out;
+}
+
+static inline COORD_XYZ evaluateGlonassBroadcastCoordAtEpoch(
+   const rinex::NAV_RECORD& navRec,
+   const QDateTime&         navEpoch,
+   const QDateTime&         epoch) noexcept {
+   const double dtTotal = static_cast<double> (navEpoch.secsTo(epoch));
+
+   if (std::abs(dtTotal) < 1e-9) {
+      return navRec.coord;
+   }
+
+   GloState s{
+      navRec.coord.x,
+      navRec.coord.y,
+      navRec.coord.z,
+      navRec.velocity.x,
+      navRec.velocity.y,
+      navRec.velocity.z
+   };
+
+   const COORD_XYZ luniSolarAcc{
+      navRec.acceleration.x,
+      navRec.acceleration.y,
+      navRec.acceleration.z
+   };
+
+   double remaining = dtTotal;
+
+   while (std::abs(remaining) > 1e-9) {
+      const double h = (std::abs(remaining) > 60.0)
+        ? (remaining > 0.0 ? 60.0 : -60.0)
+        : remaining;
+
+      s          = rk4Step(s, luniSolarAcc, h);
+      remaining -= h;
+   }
+
+   return COORD_XYZ{ s.x, s.y, s.z };
+}
+
+// ============================================================================
 // ГЛОНАСС LT applicability (временной gate)
 // ============================================================================
 
@@ -508,6 +634,72 @@ void navsolver::ErrorCalculator::computeResidualErrors(pipeline::Context& ctx) {
             const auto& sp3Rec       = itSp3Sat.value();
             rinex::NAV_RECORD navRec = itNavSat.value();
 
+            // ###
+            const QDateTime navEpochPicked =
+               (sat.getSystem() == SatelliteSystem::TYPE::GLONASS &&
+                navRecsGlo &&
+                itNavEpochGlo != navRecsGlo->cend())
+                    ? itNavEpochGlo.key()
+                    : QDateTime{};
+
+            const bool logGloFirstPoint =
+               (sat.getSystem() == SatelliteSystem::TYPE::GLONASS) &&
+               (itPoint == pointMap.cbegin());
+
+            if (logGloFirstPoint) {
+               qDebug().noquote()
+                  << QString("[EC][GLO_NAV_PICK] epoch=%1 sat=R%2 navEpoch=%3 tk=%4 week_time=%5")
+                  .arg(epoch.toString(Qt::ISODate))
+                  .arg(sat.getNumber(), 2, 10, QChar('0'))
+                  .arg(navEpochPicked.isValid()
+                                 ? navEpochPicked.toString(Qt::ISODate)
+                                 : QStringLiteral("invalid"))
+                  .arg(navRec.clock.tk,        0, 'f', 3)
+                  .arg(navRec.clock.week_time, 0, 'f', 3);
+            }
+
+            // после получения navEpochPicked / navRec / epoch
+            const double dt_glo = static_cast<double> (navEpochPicked.secsTo(epoch));
+
+            const double rawNorm =
+               std::sqrt(navRec.coord.x * navRec.coord.x +
+                         navRec.coord.y * navRec.coord.y +
+                         navRec.coord.z * navRec.coord.z);
+
+            const double velNorm =
+               std::sqrt(navRec.velocity.x * navRec.velocity.x +
+                         navRec.velocity.y * navRec.velocity.y +
+                         navRec.velocity.z * navRec.velocity.z);
+
+            const double accNorm =
+               std::sqrt(navRec.acceleration.x * navRec.acceleration.x +
+                         navRec.acceleration.y * navRec.acceleration.y +
+                         navRec.acceleration.z * navRec.acceleration.z);
+
+            if (logGloFirstPoint) {
+               qDebug().noquote()
+                  << QString("[EC][GLO_PROP_INPUT] epoch=%1 sat=R%2 navEpoch=%3 dt=%4 "
+                             "rawNorm=%5 velNorm=%6 accNorm=%7 "
+                             "rawXYZ=(%8,%9,%10) vel=(%11,%12,%13) acc=(%14,%15,%16)")
+                  .arg(epoch.toString(Qt::ISODate))
+                  .arg(sat.getNumber(),       2, 10,  QChar('0'))
+                  .arg(navEpochPicked.toString(Qt::ISODate))
+                  .arg(dt_glo,                0, 'f', 1)
+                  .arg(rawNorm,               0, 'f', 3)
+                  .arg(velNorm,               0, 'f', 6)
+                  .arg(accNorm,               0, 'f', 9)
+                  .arg(navRec.coord.x,        0, 'f', 6)
+                  .arg(navRec.coord.y,        0, 'f', 6)
+                  .arg(navRec.coord.z,        0, 'f', 6)
+                  .arg(navRec.velocity.x,     0, 'f', 9)
+                  .arg(navRec.velocity.y,     0, 'f', 9)
+                  .arg(navRec.velocity.z,     0, 'f', 9)
+                  .arg(navRec.acceleration.x, 0, 'f', 12)
+                  .arg(navRec.acceleration.y, 0, 'f', 12)
+                  .arg(navRec.acceleration.z, 0, 'f', 12);
+            }
+            // ###
+
             auto prc = sbas.fastPrc_m(sat, epoch);
 
             // ========== Получение LT с учётом системы ==========
@@ -554,6 +746,8 @@ void navsolver::ErrorCalculator::computeResidualErrors(pipeline::Context& ctx) {
             if (sat.getSystem() == SatelliteSystem::TYPE::GPS) {
                const double gpsTowOrbit = secondsOfWeekWall(epoch);
                navCoordKm = evaluateGpsBroadcastCoordKmAtTow(navRec, gpsTowOrbit);
+            } else if (sat.getSystem() == SatelliteSystem::TYPE::GLONASS) {
+               navCoordKm = evaluateGlonassBroadcastCoordAtEpoch(navRec, navEpochPicked, epoch);
             }
 
             const COORD_XYZ nav_m = scaleKmToM_ifNeeded(navCoordKm);
@@ -593,6 +787,79 @@ void navsolver::ErrorCalculator::computeResidualErrors(pipeline::Context& ctx) {
             const double clkDiff_s  = clkSp3L1 - clkNavL1;
             const double clkTerm_m  = constants::PZ_9011::c * clkDiff_s;
             const double deltaSp3_m = orbitProj_m - clkTerm_m;
+
+            // ###
+            if (logGloFirstPoint) {
+               qDebug().noquote()
+                  << QString(
+                  "[EC][GLO_SP3_AUDIT] epoch=%1 sat=R%2 clkSp3L1=%3 clkNavL1=%4 clkDiff_s=%5 clkTerm_m=%6 orbitProj_m=%7 deltaSp3_m=%8")
+                  .arg(epoch.toString(Qt::ISODate))
+                  .arg(sat.getNumber(), 2, 10,  QChar('0'))
+                  .arg(clkSp3L1,        0, 'f', 12)
+                  .arg(clkNavL1,        0, 'f', 12)
+                  .arg(clkDiff_s,       0, 'f', 12)
+                  .arg(clkTerm_m,       0, 'f', 4)
+                  .arg(orbitProj_m,     0, 'f', 4)
+                  .arg(deltaSp3_m,      0, 'f', 4);
+            }
+            const COORD_XYZ navRawKm  = navRec.coord;
+            const COORD_XYZ navPropKm = navCoordKm; // то, что реально пошло дальше после вашей GLONASS propagation
+
+            const COORD_XYZ navRawM  = scaleKmToM_ifNeeded(navRawKm);
+            const COORD_XYZ navPropM = scaleKmToM_ifNeeded(navPropKm);
+
+            const COORD_XYZ d_raw = {
+               r_sp3_pc.x - navRawM.x,
+               r_sp3_pc.y - navRawM.y,
+               r_sp3_pc.z - navRawM.z
+            };
+
+            const COORD_XYZ d_prop = {
+               r_sp3_pc.x - navPropM.x,
+               r_sp3_pc.y - navPropM.y,
+               r_sp3_pc.z - navPropM.z
+            };
+
+            const double orbitProjRaw_m =
+               d_raw.x * los.x + d_raw.y * los.y + d_raw.z * los.z;
+
+            const double orbitProjProp_m =
+               d_prop.x * los.x + d_prop.y * los.y + d_prop.z * los.z;
+
+            if (logGloFirstPoint) {
+               qDebug().noquote()
+                  << QString("[EC][GLO_PROP_AUDIT] epoch=%1 sat=R%2 dt=%3 "
+                             "orbitProjRaw=%4 orbitProjProp=%5 "
+                             "propNorm=%6")
+                  .arg(epoch.toString(Qt::ISODate))
+                  .arg(sat.getNumber(), 2, 10,  QChar('0'))
+                  .arg(dt_glo,          0, 'f', 1)
+                  .arg(orbitProjRaw_m,  0, 'f', 4)
+                  .arg(orbitProjProp_m, 0, 'f', 4)
+                  .arg(std::sqrt(navPropKm.x * navPropKm.x +
+                                 navPropKm.y * navPropKm.y +
+                                 navPropKm.z * navPropKm.z), 0, 'f', 3);
+            }
+
+            if (logGloFirstPoint) {
+               const double navDiffKm =
+                  std::sqrt(
+                     (navCoordKm.x - navRec.coord.x) * (navCoordKm.x - navRec.coord.x) +
+                     (navCoordKm.y - navRec.coord.y) * (navCoordKm.y - navRec.coord.y) +
+                     (navCoordKm.z - navRec.coord.z) * (navCoordKm.z - navRec.coord.z));
+
+               qDebug().noquote()
+                  << QString("[EC][GLO_PATH_CHECK] epoch=%1 sat=R%2 dt=%3 navDiffKm=%4 "
+                             "orbitProjRaw=%5 orbitProjProp=%6 deltaSp3=%7")
+                  .arg(epoch.toString(Qt::ISODate))
+                  .arg(sat.getNumber(), 2, 10,  QChar('0'))
+                  .arg(dt_glo,          0, 'f', 1)
+                  .arg(navDiffKm,       0, 'f', 6)
+                  .arg(orbitProjRaw_m,  0, 'f', 4)
+                  .arg(orbitProjProp_m, 0, 'f', 4)
+                  .arg(deltaSp3_m,      0, 'f', 4);
+            }
+            // ###
 
             // ========== SBAS коррекции ==========
             const bool   hasFast    = prc.has_value();
