@@ -475,6 +475,7 @@ void SBASCorrectionStore::buildTimelines() {
       prnMasks_.push_back(std::move(iv));
    }
 
+
    // --------- FAST / MIXED (2..5, 24) ---------
    auto ingestFast = [&](MESSAGE_TYPE ty) {
                         for (const auto& r : parsed_.value(ty)) {
@@ -1165,10 +1166,10 @@ int SBASCorrectionStore::findCellCorners(const QVector<ActiveNode>& grid,
    }
 
    QVector<QPair<double, double> > candidates = {
-      { lat_floor, lo1                                                                                       },
-      { lat_floor, lo2                                                                                       },
-      { lat_ceil,  lo3                                                                                       },
-      { lat_ceil,  lo4                                                                                       }
+      { lat_floor, lo1                                                                                            },
+      { lat_floor, lo2                                                                                            },
+      { lat_ceil,  lo3                                                                                            },
+      { lat_ceil,  lo4                                                                                            }
    };
 
    for (const auto& cand : candidates) {

@@ -18,9 +18,15 @@ bool Application::initialize(const ApplicationConfig& config) {
       cfg_.rinexNavGpsPath,
       cfg_.sbasPath,
       io::SourceType::FILE_CSV,
-      cfg_.dcbPath
+      cfg_.dcbPath,
+      cfg_.antexPath,
+      cfg_.satMetadataPath
    };
+
+   navsolver::NavigationTaskSolver::Config navSolverCfg{};
+
    modules_.clear();
+
    modules_.push_back(std::make_unique<io::DataManager> (ioCfg));
 
    // 2) Генерация сетки
@@ -33,7 +39,7 @@ bool Application::initialize(const ApplicationConfig& config) {
    modules_.push_back(std::make_unique<navsolver::ErrorCalculator>());
 
    // 5) Решение навигационной задачи и метрики
-   modules_.push_back(std::make_unique<navsolver::NavigationTaskSolver>());
+   modules_.push_back(std::make_unique<navsolver::NavigationTaskSolver> (navSolverCfg));
 
    return true;
 }

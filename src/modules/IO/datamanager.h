@@ -6,6 +6,7 @@
 
 #include <inav/Sp3>
 #include <inav/RINEX>
+#include <inav/Antex>
 
 #include "modules/IModule/imodule.h"
 #include "sbascorrectionstore.h"
@@ -21,6 +22,8 @@ public:
       QString    sbasPath;
       SourceType sbasSourceType = SourceType::FILE_CSV;
       QString    dcbPath;
+      QString    antexPath;
+      QString    satMetadataPath;
    };
    explicit DataManager(const Config& cfg);
    bool    execute(pipeline::Context& ctx) override;
@@ -28,13 +31,16 @@ public:
       return QStringLiteral("Загрузка IO-данных");
    }
 
-   const sp3::SP3_FILE*       getSP3File()const noexcept;
-   const rinex::RINEX_FILE*   getRinexGlonassFile() const noexcept;
-   const rinex::RINEX_FILE*   getRinexGpsFile() const noexcept;
-   const rinex::RINEX_FILE*   getRinexFile()const noexcept;
-   const SBASCorrectionStore &getSBASStore() const noexcept;
-   io::SBASCorrectionStore &  sbasStore() noexcept;
-   std::optional<double>      getGlonassL3MinusL1Bias(const Satellite& satId) const noexcept;
+   const sp3::SP3_FILE*               getSP3File()const noexcept;
+   const rinex::RINEX_FILE*           getRinexGlonassFile() const noexcept;
+   const rinex::RINEX_FILE*           getRinexGpsFile() const noexcept;
+   const rinex::RINEX_FILE*           getRinexFile()const noexcept;
+   const SBASCorrectionStore &        getSBASStore() const noexcept;
+   io::SBASCorrectionStore &          sbasStore() noexcept;
+   std::optional<double>              getGlonassL3MinusL1Bias(const Satellite& satId) const noexcept;
+   bool                               loadAntennaModel(const QString& antexPath,
+                                                       const QString& metadataPath);
+   const antex::SatelliteAntennaModel*getAntennaModel() const noexcept;
 
 private:
 
@@ -58,6 +64,7 @@ private:
    std::unique_ptr<rinex::RINEX_FILE> rinexGpsFile_;
    SBASCorrectionStore sbasStore_;
    std::unordered_map<Satellite, double> glonassDcbL3L1_;
+   std::unique_ptr<antex::SatelliteAntennaModel> antennaModel_;
 };
 }
 

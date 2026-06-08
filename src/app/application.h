@@ -9,6 +9,8 @@ struct ApplicationConfig {
    QString rinexNavGpsPath;
    QString sbasPath;
    QString dcbPath;
+   QString antexPath;       // путь к igs20.atx
+   QString satMetadataPath; // путь к igs_satellite_metadata.snx
 
    // Диапозон сетки в заданном диапозоне
    // Например: широта от 35° до 75°, долгота от 10° до 150°, шаг по долготе 0.5°

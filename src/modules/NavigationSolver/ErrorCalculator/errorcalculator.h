@@ -1,8 +1,10 @@
 #ifndef ERRORCALCULATOR_H
 #define ERRORCALCULATOR_H
 
+#include <inav/RINEX>
+#include <inav/Antex>
+
 #include "modules/IModule/imodule.h"
-#include "src/RINEX/rinex.h"
 
 namespace navsolver {
 class ErrorCalculator : public pipeline::IModule {

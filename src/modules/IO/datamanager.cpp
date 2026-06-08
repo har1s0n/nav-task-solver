@@ -37,6 +37,12 @@ bool DataManager::execute(pipeline::Context& ctx) {
       return false;
    }
 
+   if (!loadAntennaModel(cfg_.antexPath, cfg_.satMetadataPath)) {
+      qCritical() << name() << ": не удалось загрузить ANTEX модель:" << cfg_.antexPath << " | " << cfg_.satMetadataPath;
+      return false;
+   }
+
+
    return true;
 }
 
@@ -294,4 +300,29 @@ std::optional<double> DataManager::getGlonassL3MinusL1Bias(const Satellite& satI
    return it != glonassDcbL3L1_.end()
               ? std::make_optional(it->second)
               : std::nullopt;
+}
+
+bool DataManager::loadAntennaModel(const QString& antexPath, const QString& metadataPath) {
+   antennaModel_ = std::make_unique<antex::SatelliteAntennaModel>();
+
+   if (!antennaModel_->loadAntex(antexPath)) {
+      qCritical() << "[DataManager] Не удалось загрузить ANTEX:" << antexPath;
+      antennaModel_.reset();
+      return false;
+   }
+
+   if (!antennaModel_->loadMetadata(metadataPath)) {
+      qCritical() << "[DataManager] Не удалось загрузить Satellite Metadata:"
+                  << metadataPath;
+      antennaModel_.reset();
+      return false;
+   }
+
+   qInfo() << "[DataManager] ANTEX antenna model успешно загружена";
+
+   return true;
+}
+
+const antex::SatelliteAntennaModel*DataManager::getAntennaModel() const noexcept{
+   return antennaModel_.get();
 }

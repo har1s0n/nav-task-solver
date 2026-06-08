@@ -4,6 +4,14 @@
 #include <QTimeZone>
 #include <cmath>
 
+
+#include <QDateTime>
+#include <QString>
+#include <QVector>
+#include <QtDebug>
+#include "sbascorrectionstore.h"
+
+
 // ============================================================================
 // Статистика — только необходимые метрики для отладки
 // ============================================================================
@@ -16,29 +24,137 @@ struct Stats {
    qint64 satsProcessed{ 0 };
    qint64 satsMissingNav{ 0 };
 
-   // SBAS coverage
-   qint64 satsFastLt{ 0 };   // Fast + LT (лучшее качество)
-   qint64 satsFastOnly{ 0 }; // Только Fast
-   qint64 satsLtOnly{ 0 };   // Только LT
-   qint64 satsNoSbas{ 0 };   // Без SBAS
+   qint64 satsFastLt{ 0 };
+   qint64 satsFastOnly{ 0 };
+   qint64 satsLtOnly{ 0 };
+   qint64 satsNoSbas{ 0 };
 
-   // LT matching по системам
    qint64 gpsLtMatched{ 0 };
    qint64 gpsLtMissed{ 0 };
    qint64 gloLtMatched{ 0 };
    qint64 gloLtMissed{ 0 };
 
-   // Master clock
    qint64 masterClkApplied{ 0 };
    qint64 masterClkSkipped{ 0 };
 
-   // Residuals
    qint64 residualsFinite{ 0 };
+
+   qint64 improvedCount{ 0 };
+   qint64 worsenedCount{ 0 };
+   qint64 sameCount{ 0 };
+
+   qint64 improvedFastLt{ 0 };
+   qint64 worsenedFastLt{ 0 };
+
+   qint64 improvedFastOnly{ 0 };
+   qint64 worsenedFastOnly{ 0 };
+
+   qint64 improvedLtOnly{ 0 };
+   qint64 worsenedLtOnly{ 0 };
+
+   qint64 masterClkImproved{ 0 };
+   qint64 masterClkWorsened{ 0 };
+
+   double sumAbsDeltaSp3{ 0.0 };
+   double sumAbsResidualFinal{ 0.0 };
+   qint64 sbasFiniteCases{ 0 };
 };
 
 // ============================================================================
 // Вспомогательные функции
 // ============================================================================
+
+enum class SbasMode {
+   None,
+   FastOnly,
+   LtOnly,
+   FastLt
+};
+
+static inline SbasMode detectSbasMode(bool hasFast, bool hasLt) noexcept {
+   if (hasFast && hasLt) {
+      return SbasMode::FastLt;
+   }
+
+   if (hasFast) {
+      return SbasMode::FastOnly;
+   }
+
+   if (hasLt) {
+      return SbasMode::LtOnly;
+   }
+   return SbasMode::None;
+}
+
+static inline const char*sbasModeToString(SbasMode mode) noexcept {
+   switch (mode) {
+     case SbasMode::FastLt:   return "FAST_LT";
+     case SbasMode::FastOnly: return "FAST_ONLY";
+     case SbasMode::LtOnly:   return "LT_ONLY";
+     default:                 return "NONE";
+   }
+}
+
+static inline void accumulateOutcome(Stats&   st,
+                                     SbasMode mode,
+                                     double   deltaSp3,
+                                     double   residualFinal) noexcept {
+   if (!qIsFinite(deltaSp3) || !qIsFinite(residualFinal)) {
+      return;
+   }
+
+   const double a = std::abs(deltaSp3);
+   const double b = std::abs(residualFinal);
+
+   st.sumAbsDeltaSp3      += a;
+   st.sumAbsResidualFinal += b;
+
+   constexpr double EPS = 1e-6;
+
+   if (b + EPS < a) {
+      ++st.improvedCount;
+
+      if (mode == SbasMode::FastLt) {
+         ++st.improvedFastLt;
+      } else if (mode == SbasMode::FastOnly) {
+         ++st.improvedFastOnly;
+      } else if (mode == SbasMode::LtOnly) {
+         ++st.improvedLtOnly;
+      }
+   } else if (b > a + EPS) {
+      ++st.worsenedCount;
+
+      if (mode == SbasMode::FastLt) {
+         ++st.worsenedFastLt;
+      } else if (mode == SbasMode::FastOnly) {
+         ++st.worsenedFastOnly;
+      } else if (mode == SbasMode::LtOnly) {
+         ++st.worsenedLtOnly;
+      }
+   } else {
+      ++st.sameCount;
+   }
+}
+
+static inline void accumulateMasterClkEffect(Stats& st,
+                                             double residualRaw,
+                                             double residualFinal,
+                                             bool   clkApplied) noexcept {
+   if (!clkApplied || !qIsFinite(residualRaw) || !qIsFinite(residualFinal)) {
+      return;
+   }
+
+   const double a = std::abs(residualRaw);
+   const double b = std::abs(residualFinal);
+
+   constexpr double EPS = 1e-6;
+
+   if (b + EPS < a) {
+      ++st.masterClkImproved;
+   } else if (b > a + EPS) {
+      ++st.masterClkWorsened;
+   }
+}
 
 static inline double secondsOfWeekUtc(const QDateTime& tUtc) noexcept {
    static const QDateTime gpsEpoch(QDate(1980, 1, 6), QTime(0, 0, 0), Qt::UTC);
@@ -309,29 +425,7 @@ static inline COORD_XYZ evaluateGlonassBroadcastCoordAtEpoch(
 // ============================================================================
 
 static inline QDateTime glonassTrFromNavRecord(const rinex::NAV_RECORD& rec) {
-   if (!rec.clock.epoch.isValid()) {
-      return {};
-   }
-
-   int sod = -1;
-
-   if (rec.clock.tk >= 0.0) {
-      sod = static_cast<int> (std::llround(rec.clock.tk));
-   } else if (rec.clock.week_time >= 0.0) {
-      sod = static_cast<int> (std::llround(rec.clock.week_time)) % 86400;
-   } else {
-      return {};
-   }
-
-   sod %= 86400;
-
-   if (sod < 0) {
-      sod += 86400;
-   }
-
-   return QDateTime(rec.clock.epoch.date(),
-                    QTime(0, 0),
-                    rec.clock.epoch.timeRepresentation()).addSecs(sod);
+   return rec.clock.epoch;
 }
 
 struct GlonassLtIodWindow {
@@ -364,16 +458,15 @@ static inline bool passesGlonassLtApplicability(const rinex::NAV_RECORD&        
    if (!w.valid || !lt.recvTime.isValid()) {
       return false;
    }
-
    const auto tr = glonassTrFromNavRecord(navRec);
 
    if (!tr.isValid()) {
       return false;
    }
+   const int  dtSec = static_cast<int> (tr.toUTC().secsTo(lt.recvTime.toUTC()));
+   const bool ok    = (dtSec >= w.L_sec) && (dtSec <= (w.L_sec + w.V_sec));
 
-   const int dtSec = static_cast<int> (tr.toUTC().secsTo(lt.recvTime.toUTC()));
-
-   return (dtSec >= w.L_sec) && (dtSec <= (w.L_sec + w.V_sec));
+   return ok;
 }
 
 // ============================================================================
@@ -428,12 +521,12 @@ static inline double evaluateLtClockMeters(const io::LongTermCorrectionEntry& lt
  * @brief Поиск GPS NAV записи по совпадению IODE с LT correction.
  *        Ищет как назад, так и вперёд по времени (±maxAgeSec).
  */
-static inline std::optional<rinex::NAV_RECORD> findGpsNavByIode(
-   const QMap<QDateTime, QMap<Satellite, rinex::NAV_RECORD> >& navRecs,
-   const Satellite&                                            sat,
-   int                                                         targetIode,
-   const QDateTime&                                            epoch,
-   int                                                         maxAgeSec = 14400) {
+static inline std::optional<rinex::NAV_RECORD> findGpsNavByIode(const QMap<QDateTime, QMap<Satellite, rinex::NAV_RECORD> >& navRecs,
+                                                                const Satellite&                                            sat,
+                                                                int                                                         targetIode,
+                                                                const QDateTime&                                            epoch,
+                                                                int                                                         maxAgeSec =
+                                                                14400) {
    // Поиск назад
    auto itBack = navRecs.upperBound(epoch);
 
@@ -498,8 +591,8 @@ bool navsolver::ErrorCalculator::execute(pipeline::Context& ctx) {
       qWarning() << "[ErrorCalculator] Недостаточно данных для расчета.";
       return false;
    }
-
    computeResidualErrors(ctx);
+
    return true;
 }
 
@@ -530,6 +623,7 @@ void navsolver::ErrorCalculator::computeResidualErrors(pipeline::Context& ctx) {
    ctx.residualErrors.clear();
 
    Stats st;
+
    const auto& sp3Recs = sp3->records;
    const auto& sbas    = ctx.dm->getSBASStore();
 
@@ -537,9 +631,18 @@ void navsolver::ErrorCalculator::computeResidualErrors(pipeline::Context& ctx) {
 
    struct TempResidual {
       Satellite sat;
-      double    deltaSp3{ qQNaN() };
-      double    deltaSdcm{ qQNaN() };
+      SbasMode  mode{ SbasMode::None };
+
+      double deltaSp3{ qQNaN() };
+      double deltaSdcm{ qQNaN() };
+
+      double prc{ 0.0 };
+      double rrc{ 0.0 };
+      double drLos{ 0.0 };
+      double dtLt{ 0.0 };
+
       double    residualRaw{ qQNaN() };
+      COORD_XYZ satEcef{};
    };
 
    for (auto itEpoch = ctx.visibleSats.cbegin(); itEpoch != ctx.visibleSats.cend(); ++itEpoch) {
@@ -642,64 +745,6 @@ void navsolver::ErrorCalculator::computeResidualErrors(pipeline::Context& ctx) {
                     ? itNavEpochGlo.key()
                     : QDateTime{};
 
-            const bool logGloFirstPoint =
-               (sat.getSystem() == SatelliteSystem::TYPE::GLONASS) &&
-               (itPoint == pointMap.cbegin());
-
-            if (logGloFirstPoint) {
-               qDebug().noquote()
-                  << QString("[EC][GLO_NAV_PICK] epoch=%1 sat=R%2 navEpoch=%3 tk=%4 week_time=%5")
-                  .arg(epoch.toString(Qt::ISODate))
-                  .arg(sat.getNumber(), 2, 10, QChar('0'))
-                  .arg(navEpochPicked.isValid()
-                                 ? navEpochPicked.toString(Qt::ISODate)
-                                 : QStringLiteral("invalid"))
-                  .arg(navRec.clock.tk,        0, 'f', 3)
-                  .arg(navRec.clock.week_time, 0, 'f', 3);
-            }
-
-            // после получения navEpochPicked / navRec / epoch
-            const double dt_glo = static_cast<double> (navEpochPicked.secsTo(epoch));
-
-            const double rawNorm =
-               std::sqrt(navRec.coord.x * navRec.coord.x +
-                         navRec.coord.y * navRec.coord.y +
-                         navRec.coord.z * navRec.coord.z);
-
-            const double velNorm =
-               std::sqrt(navRec.velocity.x * navRec.velocity.x +
-                         navRec.velocity.y * navRec.velocity.y +
-                         navRec.velocity.z * navRec.velocity.z);
-
-            const double accNorm =
-               std::sqrt(navRec.acceleration.x * navRec.acceleration.x +
-                         navRec.acceleration.y * navRec.acceleration.y +
-                         navRec.acceleration.z * navRec.acceleration.z);
-
-            if (logGloFirstPoint) {
-               qDebug().noquote()
-                  << QString("[EC][GLO_PROP_INPUT] epoch=%1 sat=R%2 navEpoch=%3 dt=%4 "
-                             "rawNorm=%5 velNorm=%6 accNorm=%7 "
-                             "rawXYZ=(%8,%9,%10) vel=(%11,%12,%13) acc=(%14,%15,%16)")
-                  .arg(epoch.toString(Qt::ISODate))
-                  .arg(sat.getNumber(),       2, 10,  QChar('0'))
-                  .arg(navEpochPicked.toString(Qt::ISODate))
-                  .arg(dt_glo,                0, 'f', 1)
-                  .arg(rawNorm,               0, 'f', 3)
-                  .arg(velNorm,               0, 'f', 6)
-                  .arg(accNorm,               0, 'f', 9)
-                  .arg(navRec.coord.x,        0, 'f', 6)
-                  .arg(navRec.coord.y,        0, 'f', 6)
-                  .arg(navRec.coord.z,        0, 'f', 6)
-                  .arg(navRec.velocity.x,     0, 'f', 9)
-                  .arg(navRec.velocity.y,     0, 'f', 9)
-                  .arg(navRec.velocity.z,     0, 'f', 9)
-                  .arg(navRec.acceleration.x, 0, 'f', 12)
-                  .arg(navRec.acceleration.y, 0, 'f', 12)
-                  .arg(navRec.acceleration.z, 0, 'f', 12);
-            }
-            // ###
-
             auto prc = sbas.fastPrc_m(sat, epoch);
 
             // ========== Получение LT с учётом системы ==========
@@ -726,7 +771,25 @@ void navsolver::ErrorCalculator::computeResidualErrors(pipeline::Context& ctx) {
                lt = sbas.getLongTermCorrection(sat, epoch);
 
                if (lt) {
-                  if (passesGlonassLtApplicability(navRec, *lt)) {
+                  const rinex::NAV_RECORD* navForLtGate = nullptr;
+
+                  if (navRecsGlo && lt->recvTime.isValid()) {
+                     auto itGate = findNavEpochLE(*navRecsGlo, lt->recvTime);
+
+                     if (itGate != navRecsGlo->cend()) {
+                        auto itSatGate = itGate.value().constFind(sat);
+
+                        if (itSatGate != itGate.value().cend()) {
+                           navForLtGate = &itSatGate.value();
+                        }
+                     }
+                  }
+
+                  const bool gateOk = navForLtGate
+                                            ? passesGlonassLtApplicability(*navForLtGate, *lt)
+                                            : false;
+
+                  if (gateOk) {
                      ++st.gloLtMatched;
                   } else {
                      ++st.gloLtMissed;
@@ -737,8 +800,28 @@ void navsolver::ErrorCalculator::computeResidualErrors(pipeline::Context& ctx) {
 
             // ========== Координаты SP3 (phase center) ==========
             const COORD_XYZ sp3_cm_m = scaleKmToM_ifNeeded(sp3Rec.coord);
-            const COORD_XYZ r_sp3_pc =
-               Coordinates::convertMassCenter2PhaseCenter(sp3_cm_m, sat.getNumber());
+            COORD_XYZ r_sp3_pc       = sp3_cm_m;
+
+            const auto* antennaModel = ctx.dm->getAntennaModel();
+
+            if (antennaModel && antennaModel->isReady()) {
+               auto band   = antex::SatelliteAntennaModel::defaultBandForSystem(sat.getSystem());
+               auto result = antennaModel->convertMassCenter2PhaseCenter(sat, epoch, band, sp3_cm_m, r_obs);
+
+               if (!result.isValid) {
+                  if (itPoint == pointMap.cbegin()) {
+                     qWarning().noquote()
+                        << QString("[EC][CM2PC_FAIL] epoch=%1 sat=%2 code=%3 error=%4")
+                        .arg(epoch.toString(Qt::ISODate))
+                        .arg(sat.toString())
+                        .arg(result.errorCode)
+                        .arg(result.errorMessage);
+                  }
+                  continue;
+               }
+
+               r_sp3_pc = result.phaseCenter;
+            }
 
             // ========== Координаты NAV (broadcast) ==========
             COORD_XYZ navCoordKm = navRec.coord;
@@ -788,84 +871,13 @@ void navsolver::ErrorCalculator::computeResidualErrors(pipeline::Context& ctx) {
             const double clkTerm_m  = constants::PZ_9011::c * clkDiff_s;
             const double deltaSp3_m = orbitProj_m - clkTerm_m;
 
-            // ###
-            if (logGloFirstPoint) {
-               qDebug().noquote()
-                  << QString(
-                  "[EC][GLO_SP3_AUDIT] epoch=%1 sat=R%2 clkSp3L1=%3 clkNavL1=%4 clkDiff_s=%5 clkTerm_m=%6 orbitProj_m=%7 deltaSp3_m=%8")
-                  .arg(epoch.toString(Qt::ISODate))
-                  .arg(sat.getNumber(), 2, 10,  QChar('0'))
-                  .arg(clkSp3L1,        0, 'f', 12)
-                  .arg(clkNavL1,        0, 'f', 12)
-                  .arg(clkDiff_s,       0, 'f', 12)
-                  .arg(clkTerm_m,       0, 'f', 4)
-                  .arg(orbitProj_m,     0, 'f', 4)
-                  .arg(deltaSp3_m,      0, 'f', 4);
-            }
-            const COORD_XYZ navRawKm  = navRec.coord;
-            const COORD_XYZ navPropKm = navCoordKm; // то, что реально пошло дальше после вашей GLONASS propagation
-
-            const COORD_XYZ navRawM  = scaleKmToM_ifNeeded(navRawKm);
-            const COORD_XYZ navPropM = scaleKmToM_ifNeeded(navPropKm);
-
-            const COORD_XYZ d_raw = {
-               r_sp3_pc.x - navRawM.x,
-               r_sp3_pc.y - navRawM.y,
-               r_sp3_pc.z - navRawM.z
-            };
-
-            const COORD_XYZ d_prop = {
-               r_sp3_pc.x - navPropM.x,
-               r_sp3_pc.y - navPropM.y,
-               r_sp3_pc.z - navPropM.z
-            };
-
-            const double orbitProjRaw_m =
-               d_raw.x * los.x + d_raw.y * los.y + d_raw.z * los.z;
-
-            const double orbitProjProp_m =
-               d_prop.x * los.x + d_prop.y * los.y + d_prop.z * los.z;
-
-            if (logGloFirstPoint) {
-               qDebug().noquote()
-                  << QString("[EC][GLO_PROP_AUDIT] epoch=%1 sat=R%2 dt=%3 "
-                             "orbitProjRaw=%4 orbitProjProp=%5 "
-                             "propNorm=%6")
-                  .arg(epoch.toString(Qt::ISODate))
-                  .arg(sat.getNumber(), 2, 10,  QChar('0'))
-                  .arg(dt_glo,          0, 'f', 1)
-                  .arg(orbitProjRaw_m,  0, 'f', 4)
-                  .arg(orbitProjProp_m, 0, 'f', 4)
-                  .arg(std::sqrt(navPropKm.x * navPropKm.x +
-                                 navPropKm.y * navPropKm.y +
-                                 navPropKm.z * navPropKm.z), 0, 'f', 3);
-            }
-
-            if (logGloFirstPoint) {
-               const double navDiffKm =
-                  std::sqrt(
-                     (navCoordKm.x - navRec.coord.x) * (navCoordKm.x - navRec.coord.x) +
-                     (navCoordKm.y - navRec.coord.y) * (navCoordKm.y - navRec.coord.y) +
-                     (navCoordKm.z - navRec.coord.z) * (navCoordKm.z - navRec.coord.z));
-
-               qDebug().noquote()
-                  << QString("[EC][GLO_PATH_CHECK] epoch=%1 sat=R%2 dt=%3 navDiffKm=%4 "
-                             "orbitProjRaw=%5 orbitProjProp=%6 deltaSp3=%7")
-                  .arg(epoch.toString(Qt::ISODate))
-                  .arg(sat.getNumber(), 2, 10,  QChar('0'))
-                  .arg(dt_glo,          0, 'f', 1)
-                  .arg(navDiffKm,       0, 'f', 6)
-                  .arg(orbitProjRaw_m,  0, 'f', 4)
-                  .arg(orbitProjProp_m, 0, 'f', 4)
-                  .arg(deltaSp3_m,      0, 'f', 4);
-            }
-            // ###
-
             // ========== SBAS коррекции ==========
-            const bool   hasFast    = prc.has_value();
-            const bool   hasLt      = lt.has_value();
-            const bool   hasAnySbas = hasFast || hasLt;
-            const double prc_m      = hasFast ? *prc : 0.0;
+            const bool hasFast    = prc.has_value();
+            const bool hasLt      = lt.has_value();
+            const bool hasAnySbas = hasFast || hasLt;
+            // const double   prc_m      = hasFast ? *prc : 0.0;
+            const double   prc_m    = hasFast ? -(*prc) : 0.0;
+            const SbasMode sbasMode = detectSbasMode(hasFast, hasLt);
 
             if (hasFast && hasLt) {
                ++st.satsFastLt;
@@ -899,7 +911,9 @@ void navsolver::ErrorCalculator::computeResidualErrors(pipeline::Context& ctx) {
                   if (std::abs(dt_fast) > 0.5) {
                      const double rrc      = (fp->current.prc_m - fp->previous.prc_m) / dt_fast;
                      const double dt_apply = fp->current.recvTime.secsTo(epoch);
-                     rrc_m = rrc * dt_apply;
+
+                     // rrc_m = rrc * dt_apply;
+                     rrc_m = 0.0;
                   }
                }
             }
@@ -912,11 +926,53 @@ void navsolver::ErrorCalculator::computeResidualErrors(pipeline::Context& ctx) {
             const double residualRaw_m =
                hasAnySbas ? (deltaSp3_m - deltaSdcm_m) : qQNaN();
 
+            // ###
+            if (hasAnySbas && (itPoint == pointMap.cbegin())) {
+               qDebug().noquote()
+                  << QString("[EC][SBAS_DIAG] ep=%1 sat=%2 mode=%3 orbitProj=%4 clkTerm=%5 "
+                             "dr_los=%6 dt_lt=%7 prc=%8 dSp3=%9 dSdcm=%10 resid=%11 gap=%12")
+                  .arg(epoch.toString(Qt::ISODate)).arg(sat.toString()).arg(int(sbasMode))
+                  .arg(orbitProj_m,       0, 'f', 3).arg(clkTerm_m, 0, 'f', 3)
+                  .arg(dr_los_m,          0, 'f', 3).arg(dt_lt_m, 0, 'f', 3).arg(prc_m, 0, 'f', 3)
+                  .arg(deltaSp3_m,        0, 'f', 3).arg(deltaSdcm_m, 0, 'f', 3).arg(residualRaw_m, 0, 'f', 3)
+                  .arg(prc_m - clkTerm_m, 0, 'f', 3);
+            }
+
+            if (hasAnySbas && (itPoint == pointMap.cbegin())) {
+               const int navIode = std::isfinite(navRec.IODE) ? qRound(navRec.IODE) : -1; // IODE записи deltaSp3 (для GPS — после
+                                                                                          // IODE-replace)
+               const auto fIodp = sbas.fastIodp(sat, epoch);
+               const auto fLast = sbas.fastLastUpdate(sat, epoch);
+               qInfo().noquote()
+                  << QString("[EC][BIND] ep=%1 sat=%2 sys=%3 | dSp3.navIODE=%4 navEpoch=%5 "
+                             "| LT iod=%6 iodp=%7 t0=%8 recv=%9 daf0=%10 daf1=%11 dPos=(%12,%13,%14) "
+                             "| FAST iodp=%15 recv=%16")
+                  .arg(epoch.toString(Qt::ISODate)).arg(sat.toString()).arg(int(sat.getSystem()))
+                  .arg(navIode)
+                  .arg(navEpochPicked.isValid() ? navEpochPicked.toString(Qt::ISODate) : QStringLiteral("—"))
+                  .arg(lt ? lt->iod  : -1).arg(lt ? lt->iodp : -1).arg(lt ? lt->t0 : -1)
+                  .arg(lt ? lt->recvTime.toString(Qt::ISODateWithMs) : QStringLiteral("—"))
+                  .arg(lt ? lt->deltaAf0 : qQNaN(),   0, 'e', 3)
+                  .arg(lt ? lt->deltaAf1 : qQNaN(),   0, 'e', 3)
+                  .arg(lt ? lt->deltaPos.x : qQNaN(), 0, 'f', 3)
+                  .arg(lt ? lt->deltaPos.y : qQNaN(), 0, 'f', 3)
+                  .arg(lt ? lt->deltaPos.z : qQNaN(), 0, 'f', 3)
+                  .arg(fIodp ? *fIodp : -1)
+                  .arg(fLast ? fLast->toString(Qt::ISODateWithMs) : QStringLiteral("—"));
+            }
+            // ###
+
             temp.push_back(TempResidual{
                .sat         = sat,
+               .mode        = sbasMode,
                .deltaSp3    = deltaSp3_m,
                .deltaSdcm   = deltaSdcm_m,
-               .residualRaw = residualRaw_m
+               .prc         = prc_m,
+               .rrc         = rrc_m,
+               .drLos       = dr_los_m,
+               .dtLt        = dt_lt_m,
+               .residualRaw = residualRaw_m,
+               .satEcef     = r_sp3_pc
             });
          }
 
@@ -968,28 +1024,24 @@ void navsolver::ErrorCalculator::computeResidualErrors(pipeline::Context& ctx) {
                residualFinal_m -= deltaClk_m;
             }
 
+            const bool clkApplied = qIsFinite(deltaClk_m);
+            accumulateMasterClkEffect(st, tr.residualRaw, residualFinal_m, clkApplied);
+
             if (qIsFinite(residualFinal_m)) {
                ++st.residualsFinite;
-            }
 
-            // Лог residualFinal для ГЛОНАСС (первая точка в эпохе, первые 5 спутников)
-            if ((tr.sat.getSystem() == SatelliteSystem::TYPE::GLONASS) &&
-                qIsFinite(residualFinal_m) &&
-                (itPoint == pointMap.cbegin())) {
-               qDebug().noquote()
-                  << QString("[EC][GLO_RES] epoch=%1 sat=R%2 deltaSp3=%3 deltaSdcm=%4 residualFinal=%5")
-                  .arg(epoch.toString(Qt::ISODate))
-                  .arg(tr.sat.getNumber(), 2, 10,  QChar('0'))
-                  .arg(tr.deltaSp3,        0, 'f', 4)
-                  .arg(tr.deltaSdcm,       0, 'f', 4)
-                  .arg(residualFinal_m,    0, 'f', 4);
+               if (tr.mode != SbasMode::None) {
+                  ++st.sbasFiniteCases;
+               }
+               accumulateOutcome(st, tr.mode, tr.deltaSp3, residualFinal_m);
             }
 
             result.append(ResidualError{
                .satellite = tr.sat,
                .deltaSp3  = tr.deltaSp3,
                .deltaSdcm = tr.deltaSdcm,
-               .residual  = residualFinal_m
+               .residual  = residualFinal_m,
+               .satEcef   = tr.satEcef
             });
 
             ++st.satsProcessed;
@@ -1003,18 +1055,21 @@ void navsolver::ErrorCalculator::computeResidualErrors(pipeline::Context& ctx) {
 
    // ========== Итоговая статистика ==========
    qInfo().noquote()
-      << QString("[ErrorCalculator][STATS] epochs=%1 (skipSp3=%2 skipNav=%3) | "
-                 "sats: visible=%4 processed=%5 missingNav=%6 | "
-                 "sbas: fast+lt=%7 fastOnly=%8 ltOnly=%9 noSbas=%10 | "
-                 "lt: gpsOk=%11 gpsMiss=%12 gloOk=%13 gloMiss=%14 | "
-                 "masterClk: applied=%15 skipped=%16 | "
-                 "residualsFinite=%17 dcbMissing=%18")
+      << QString("[ErrorCalculator][STATS] epochs=%1 skipSp3=%2 skipNav=%3 "
+                 "visible=%4 processed=%5 missingNav=%6 dcbMissing=%7 masterClkApplied=%8 masterClkSkipped=%9")
       .arg(st.epochsTotal)
       .arg(st.epochsSkipNoSp3)
       .arg(st.epochsSkipNoNav)
       .arg(st.satsVisible)
       .arg(st.satsProcessed)
       .arg(st.satsMissingNav)
+      .arg(dcbMissing)
+      .arg(st.masterClkApplied)
+      .arg(st.masterClkSkipped);
+
+   qInfo().noquote()
+      << QString("[ErrorCalculator][SBAS] fast+lt=%1 fastOnly=%2 ltOnly=%3 noSbas=%4 "
+                 "gpsLtOk=%5 gpsLtMiss=%6 gloLtOk=%7 gloLtMiss=%8")
       .arg(st.satsFastLt)
       .arg(st.satsFastOnly)
       .arg(st.satsLtOnly)
@@ -1022,11 +1077,29 @@ void navsolver::ErrorCalculator::computeResidualErrors(pipeline::Context& ctx) {
       .arg(st.gpsLtMatched)
       .arg(st.gpsLtMissed)
       .arg(st.gloLtMatched)
-      .arg(st.gloLtMissed)
-      .arg(st.masterClkApplied)
-      .arg(st.masterClkSkipped)
+      .arg(st.gloLtMissed);
+
+   qInfo().noquote()
+      << QString("[ErrorCalculator][SURROGATE] finite=%1 sbasFinite=%2 improved=%3 worsened=%4 same=%5 "
+                 "mean|SP3-NAV|=%6 mean|residualFinal|=%7 "
+                 "impr(F+LT)=%8 impr(F)=%9 impr(LT)=%10 "
+                 "worse(F+LT)=%11 worse(F)=%12 worse(LT)=%13 "
+                 "clkImproved=%14 clkWorsened=%15")
       .arg(st.residualsFinite)
-      .arg(dcbMissing);
+      .arg(st.sbasFiniteCases)
+      .arg(st.improvedCount)
+      .arg(st.worsenedCount)
+      .arg(st.sameCount)
+      .arg(st.residualsFinite > 0 ? st.sumAbsDeltaSp3 / st.residualsFinite : 0.0,      0, 'f', 4)
+      .arg(st.residualsFinite > 0 ? st.sumAbsResidualFinal / st.residualsFinite : 0.0, 0, 'f', 4)
+      .arg(st.improvedFastLt)
+      .arg(st.improvedFastOnly)
+      .arg(st.improvedLtOnly)
+      .arg(st.worsenedFastLt)
+      .arg(st.worsenedFastOnly)
+      .arg(st.worsenedLtOnly)
+      .arg(st.masterClkImproved)
+      .arg(st.masterClkWorsened);
 }
 
 // ============================================================================
@@ -1080,10 +1153,35 @@ double navsolver::ErrorCalculator::computeBroadcastClockL1_GPS(const rinex::NAV_
 
    const double clkL1 =
       tr.svClockBias +
-      tr.svClockDrift * dt +
+      tr.svClockDrift     * dt +
       tr.svClockDriftRate * dt * dt;
 
-   return clkL1 - navRec.TGD;
+   // IS-GPS-200: Δt_sv = af0 + af1·dt + af2·dt² + Δt_rel − TGD
+   //   Δt_rel = F · e · sqrt(A) · sin(Ek),  F = −2·sqrt(mu)/c² = −4.442807633e-10 с/sqrt(м)
+   //   Ek — эксцентрическая аномалия на epoch (решение уравнения Кеплера Ek = Mk + e·sin Ek).
+   // Раньше член отсутствовал → clkNavL1 завышен до ±13 м (через e·sin Ek), что раздувало clkTerm.
+   constexpr double kMu = 3.986005e14;                              // м³/с² (GPS / WGS-84)
+   constexpr double kF  = -4.442807633e-10;                         // с/sqrt(м)
+
+   const double A  = navRec.sqrt_A * navRec.sqrt_A;                 // A = (sqrt_A)²
+   const double tk = wrapWeek(tow - navRec.Toe);                    // время от опорного момента эфемерид
+   const double n  = std::sqrt(kMu / (A * A * A)) + navRec.delta_n; // n = n0 + Δn
+   const double Mk = navRec.M0 + n * tk;                            // средняя аномалия
+
+   double Ek = Mk;                                                  // Kepler: Ek = Mk + e·sin Ek
+
+   for (int i = 0; i < 15; ++i) {
+      const double prev = Ek;
+      Ek = Mk + navRec.e * std::sin(Ek);
+
+      if (std::abs(Ek - prev) < 1e-12) {
+         break;
+      }
+   }
+
+   const double dt_rel = kF * navRec.e * navRec.sqrt_A * std::sin(Ek);
+
+   return clkL1 + dt_rel - navRec.TGD;
 }
 
 double navsolver::ErrorCalculator::computeBroadcastClockL1(const Satellite&         sat,

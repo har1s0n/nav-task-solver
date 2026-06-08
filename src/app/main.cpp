@@ -8,13 +8,13 @@ int main(int argc, char* argv[]) {
 
    ApplicationConfig config;
 
-   config.sp3Path             = "/Users/tarasovevgenij/Documents/25.04.2024_test/Sta23114.sp3";
-   config.rinexNavGlonassPath = "/Users/tarasovevgenij/Documents/25.04.2024_test/Brdc1160.24g";
-   config.rinexNavGpsPath     = "/Users/tarasovevgenij/Documents/25.04.2024_test/Brdc1160.24n";
-   config.sbasPath            = "/Users/tarasovevgenij/Documents/25.04.2024_test/data-1773399945589.csv";
-   // config.sbasPath = "/Users/tarasovevgenij/Documents/24.04.25_test/test_sbas/test_sbas_msg.csv";
-   config.dcbPath = "/Users/tarasovevgenij/Documents/25.04.2024_test/IPG_20241160000_01D_01D_DCB.BSX";
-   // config.sbasPath = "/Users/tarasovevgenij/Documents/h01.ems";
+   config.sp3Path             = "/Users/tarasovevgenij/Documents/2026_sisnet/2026-04-09/Sta24134.sp3";
+   config.rinexNavGlonassPath = "/Users/tarasovevgenij/Documents/2026_sisnet/2026-04-09/Brdc0990.26g";
+   config.rinexNavGpsPath     = "/Users/tarasovevgenij/Documents/2026_sisnet/2026-04-09/Brdc0990.26n";
+   config.sbasPath            = "/Users/tarasovevgenij/Documents/2026_sisnet/2026-04-09/2026-04-09_backup_sisnet.csv";
+   config.dcbPath             = "/Users/tarasovevgenij/Documents/2026_sisnet/2026-04-09/IPG_20260990000_01D_01D_DCB.BSX";
+   config.antexPath           = "/Users/tarasovevgenij/Documents/2026_sisnet/2026-04-09/igs20.atx";
+   config.satMetadataPath     = "/Users/tarasovevgenij/Documents/2026_sisnet/2026-04-09/igs_satellite_metadata.snx";
 
    Application navApp;
 

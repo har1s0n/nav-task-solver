@@ -15,6 +15,7 @@ struct ResidualError {
    double    deltaSp3  = 0.0; ///< ошибка SP3 - NAV
    double    deltaSdcm = 0.0; ///< ошибка SP3 - NAV+SDCM
    double    residual  = 0.0; ///< остаточная ошибка СДКМ
+   COORD_XYZ satEcef   = {};
 };
 
 struct DOP {
