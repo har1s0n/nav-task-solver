@@ -129,6 +129,11 @@ WeightModel::BuildResult WeightModel::buildRDiagonal(const QDateTime& epoch, con
             sigma2_iono = (fpp * fpp) * var_v_m2;
          } else if (okIono && qIsFinite(var_v_m2) && (var_v_m2 >= 0.0) && qIsFinite(fpp) && (fpp > 0.0)) {
             sigma2_iono = (fpp * fpp) * var_v_m2;
+         } else if (qIsFinite(fpp) && (fpp > 0.0)) {
+            //   sigma2_iono = F_pp^2 * sigma2_VIVE_fallback
+            // F_pp^2 (велик на малых углах) даёт корректное угловое подавление.
+            constexpr double kSigma2VIVEFallback_m2 = 25.0; // (5 м)^2, калибруется по [NTS][DUAL]
+            sigma2_iono = (fpp * fpp) * kSigma2VIVEFallback_m2;
          }
       }
 
@@ -157,6 +162,12 @@ WeightModel::BuildResult WeightModel::buildRDiagonal(const QDateTime& epoch, con
       w.sigma2_udre_m2  = sigma2_udre; w.sigma2_iono_m2 = sigma2_iono;
       w.sigma2_tropo_m2 = sigma2_tropo; w.sigma2_air_m2 = sigma2_air;
       out.weights.push_back(w);
+
+      qDebug().noquote() << QString("  [ACCEPT] %1 | el:%2 sigma2_udre:%3 sigma2_total:%4")
+         .arg(g.sat.toString(), -4)
+         .arg(w.elevation_deg,  0, 'f', 1) // угол места
+         .arg(w.sigma2_udre_m2, 0, 'f', 4) // σ_UDRE = sqrt(этого)
+         .arg(w.sigma2_m2,      0, 'f', 4);
 
       // qDebug().noquote() << QString("  [ACCEPT] %1 | Вес сформирован. sigma2_total: %2 | udre: %3, iono: %4, tropo: %5, air: %6")
       //    .arg(satName,           -4)

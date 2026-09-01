@@ -23,13 +23,18 @@ public:
       LeastSquaresSolver::Options wlsOpt{ LeastSquaresSolver::Mode::WLS, 1e-12, true, false };
       LeastSquaresSolver::Options olsOpt{ LeastSquaresSolver::Mode::OLS, 1e-12, true, false };
 
+      enum ConstellationMode { GPS_GLO, GLO_ONLY, GPS_ONLY };
+      ConstellationMode constellation = GLO_ONLY;
+
       bool    writeCsv = true;
       QString csvPath  = QStringLiteral("nav_solutions.csv");
+
+      // Итоговый файл по «Описанию программы ПОЭХ», 7 характеристик услуги СДКМ
+      bool    writePoehCsv = true;
+      QString poehCsvPath  = QStringLiteral("poeh_accuracy.csv");
    };
 
    explicit NavigationTaskSolver(const Config& cfg);
-   NavigationTaskSolver() = default;
-
    bool    execute(pipeline::Context& ctx) override;
    QString name() const override {
       return QStringLiteral("Навигационное решение (ВМНК/МНК)");

@@ -1,6 +1,7 @@
 #include "sbascorrectionstore.h"
 #include <QFile>
 #include <QTextStream>
+#include <QtCore/qfileinfo.h>
 #include <QtMath>
 #include <limits>
 #include <algorithm>
@@ -1166,10 +1167,10 @@ int SBASCorrectionStore::findCellCorners(const QVector<ActiveNode>& grid,
    }
 
    QVector<QPair<double, double> > candidates = {
-      { lat_floor, lo1                                                                                            },
-      { lat_floor, lo2                                                                                            },
-      { lat_ceil,  lo3                                                                                            },
-      { lat_ceil,  lo4                                                                                            }
+      { lat_floor, lo1                                                                                                    },
+      { lat_floor, lo2                                                                                                    },
+      { lat_ceil,  lo3                                                                                                    },
+      { lat_ceil,  lo4                                                                                                    }
    };
 
    for (const auto& cand : candidates) {

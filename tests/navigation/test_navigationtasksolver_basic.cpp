@@ -67,7 +67,8 @@ static double dotHdx(const std::array<double, 4>& H, const std::array<double, 4>
 // -----------------------------
 TEST(NavigationTaskSolver_Basic, Execute_ReturnsFalse_WhenNoDataManager) {
    pipeline::Context ctx{};
-   NavigationTaskSolver solver;
+   navsolver::NavigationTaskSolver::Config navSolverCfg{};
+   NavigationTaskSolver solver{ navSolverCfg };
 
    // Сделаем "не пустые" residualErrors, чтобы проверить именно dm==nullptr
    const auto ep = QDateTime::fromString("2020-01-01T00:00:00", Qt::ISODate);
@@ -89,7 +90,8 @@ TEST(NavigationTaskSolver_Basic, Execute_ReturnsFalse_WhenNoSp3OrEmpty) {
    ctx.dm = &dm;
 
    // residualErrors можно и пустыми: проверяем, что "нет SP3" отсекается раньше
-   NavigationTaskSolver solver;
+   navsolver::NavigationTaskSolver::Config navSolverCfg{};
+   NavigationTaskSolver solver{ navSolverCfg };
    EXPECT_FALSE(solver.execute(ctx));
 
    // Теперь создадим SP3_FILE, но оставим records пустым
@@ -112,7 +114,8 @@ TEST(NavigationTaskSolver_Basic, Execute_ReturnsTrue_WhenResidualErrorsEmpty) {
    dm.sp3File_->records[ep].insert(sat, makeSp3(ep, sat, 1000.0, 0.0, 0.0, 0.0));
 
    // residualErrors пустой
-   NavigationTaskSolver solver;
+   navsolver::NavigationTaskSolver::Config navSolverCfg{};
+   NavigationTaskSolver solver{ navSolverCfg };
    EXPECT_TRUE(solver.execute(ctx));
 }
 
@@ -148,11 +151,11 @@ TEST(NavigationTaskSolver_E2E, OlsFallback_RecoversDxExactly_WhenResidualMatches
    };
 
    const std::array<COORD_XYZ, 5> satPos = {
-      COORD_XYZ{ 10.0, 0.0,   0.0     },
-      COORD_XYZ{ 5.0,  5.0,   0.0     },
-      COORD_XYZ{ 5.0,  -5.0,  0.0     },
-      COORD_XYZ{ 5.0,  0.0,   5.0     },
-      COORD_XYZ{ 5.0,  0.0,   -5.0    }
+      COORD_XYZ{ 10.0, 0.0,   0.0           },
+      COORD_XYZ{ 5.0,  5.0,   0.0           },
+      COORD_XYZ{ 5.0,  -5.0,  0.0           },
+      COORD_XYZ{ 5.0,  0.0,   5.0           },
+      COORD_XYZ{ 5.0,  0.0,   -5.0          }
    };
 
    for (int i = 0; i < 5; ++i) {
@@ -251,10 +254,10 @@ TEST(NavigationTaskSolver_E2E, WlsOnly_Succeeds_WhenUdreGiveNotRequired) {
    };
 
    const std::array<COORD_XYZ, 4> satPos = {
-      COORD_XYZ{ 10.0, 0.0,   0.0    },
-      COORD_XYZ{ 5.0,  5.0,   0.0    },
-      COORD_XYZ{ 5.0,  -5.0,  0.0    },
-      COORD_XYZ{ 5.0,  0.0,   5.0    }
+      COORD_XYZ{ 10.0, 0.0,   0.0          },
+      COORD_XYZ{ 5.0,  5.0,   0.0          },
+      COORD_XYZ{ 5.0,  -5.0,  0.0          },
+      COORD_XYZ{ 5.0,  0.0,   5.0          }
    };
 
    for (int i = 0; i < 4; ++i) {

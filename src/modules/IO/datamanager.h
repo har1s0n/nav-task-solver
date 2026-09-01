@@ -23,7 +23,9 @@ public:
       SourceType sbasSourceType = SourceType::FILE_CSV;
       QString    dcbPath;
       QString    antexPath;
-      QString    satMetadataPath;
+      QString    constGpsPath;   ///< Const_YYMMDD.gps — состав ОГ GPS
+      QString    constGloPath;   ///< Const_YYMMDD.glo — состав ОГ ГЛОНАСС
+      QString    constSvnMapPath; ///< svn_map.txt — номер НКА ГЛОНАСС → IGS SVN
    };
    explicit DataManager(const Config& cfg);
    bool    execute(pipeline::Context& ctx) override;
@@ -39,7 +41,9 @@ public:
    io::SBASCorrectionStore &          sbasStore() noexcept;
    std::optional<double>              getGlonassL3MinusL1Bias(const Satellite& satId) const noexcept;
    bool                               loadAntennaModel(const QString& antexPath,
-                                                       const QString& metadataPath);
+                                                       const QString& constGpsPath,
+                                                       const QString& constGloPath,
+                                                       const QString& constSvnMapPath);
    const antex::SatelliteAntennaModel*getAntennaModel() const noexcept;
 
 private:

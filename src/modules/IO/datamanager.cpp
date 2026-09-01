@@ -1,4 +1,5 @@
 #include "datamanager.h"
+#include "constellationstatusreader.h"
 #include "dcbparser.h"
 
 #include <QFileInfo>
@@ -37,8 +38,10 @@ bool DataManager::execute(pipeline::Context& ctx) {
       return false;
    }
 
-   if (!loadAntennaModel(cfg_.antexPath, cfg_.satMetadataPath)) {
-      qCritical() << name() << ": не удалось загрузить ANTEX модель:" << cfg_.antexPath << " | " << cfg_.satMetadataPath;
+   if (!loadAntennaModel(cfg_.antexPath, cfg_.constGpsPath, cfg_.constGloPath,
+                         cfg_.constSvnMapPath)) {
+      qCritical() << name() << ": не удалось загрузить ANTEX модель:" << cfg_.antexPath
+                  << " | " << cfg_.constGpsPath << " | " << cfg_.constGloPath;
       return false;
    }
 
@@ -302,7 +305,10 @@ std::optional<double> DataManager::getGlonassL3MinusL1Bias(const Satellite& satI
               : std::nullopt;
 }
 
-bool DataManager::loadAntennaModel(const QString& antexPath, const QString& metadataPath) {
+bool DataManager::loadAntennaModel(const QString& antexPath,
+                                   const QString& constGpsPath,
+                                   const QString& constGloPath,
+                                   const QString& constSvnMapPath) {
    antennaModel_ = std::make_unique<antex::SatelliteAntennaModel>();
 
    if (!antennaModel_->loadAntex(antexPath)) {
@@ -311,9 +317,21 @@ bool DataManager::loadAntennaModel(const QString& antexPath, const QString& meta
       return false;
    }
 
-   if (!antennaModel_->loadMetadata(metadataPath)) {
-      qCritical() << "[DataManager] Не удалось загрузить Satellite Metadata:"
-                  << metadataPath;
+   // Связь PRN → SVN и состояние НКА берутся из файлов состава ОГ Const_*.gps/.glo
+   // (ранее — igs_satellite_metadata.snx)
+   satmeta::SATELLITE_METADATA_FILE          metadata;
+   ConstellationStatusReader::Statistics     constStats;
+
+   if (!ConstellationStatusReader::read(constGpsPath, constGloPath, constSvnMapPath,
+                                        metadata, &constStats)) {
+      qCritical() << "[DataManager] Не удалось прочитать состав ОГ:"
+                  << constGpsPath << "|" << constGloPath;
+      antennaModel_.reset();
+      return false;
+   }
+
+   if (!antennaModel_->loadMetadata(metadata)) {
+      qCritical() << "[DataManager] Модель антенны отвергла метаданные состава ОГ";
       antennaModel_.reset();
       return false;
    }

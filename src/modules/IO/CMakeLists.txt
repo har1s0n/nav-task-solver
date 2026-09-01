@@ -4,12 +4,14 @@ set(public_headers
     datamanager.h
     sbascorrectionstore.h
     dcbparser.h
+    constellationstatusreader.h
 )
 set(sources
     ${public_headers}
     datamanager.cpp
     sbascorrectionstore.cpp
     dcbparser.cpp
+    constellationstatusreader.cpp
 )
 
 add_library(IO OBJECT ${sources})

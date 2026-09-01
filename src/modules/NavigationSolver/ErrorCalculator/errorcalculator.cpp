@@ -458,7 +458,7 @@ static inline bool passesGlonassLtApplicability(const rinex::NAV_RECORD&        
    if (!w.valid || !lt.recvTime.isValid()) {
       return false;
    }
-   const auto tr = glonassTrFromNavRecord(navRec);
+   const auto tr = glonassTrFromNavRecord(navRec).addSecs(-900);
 
    if (!tr.isValid()) {
       return false;
@@ -768,33 +768,17 @@ void navsolver::ErrorCalculator::computeResidualErrors(pipeline::Context& ctx) {
                   ++st.gpsLtMissed;
                }
             } else if (sat.getSystem() == SatelliteSystem::TYPE::GLONASS) {
+               // Гейт применимости LT снят (решение DEBUG_STATE §1.2).
+               // Снятое условие: t_r ∈ [t_b + L, t_b + L + V] — эвристика приёмника
+               // реального времени. При iod = 252 (V = 840 с, L = 210 с) окно V уже,
+               // чем 15-минутный разброс recv внутри 30-минутного цикла эфемерид ГЛОНАСС,
+               // поэтому в суррогатной постановке недостижимо в принципе.
+               // Временную валидность LT обеспечивает kLongTermTimeoutSeconds = 360 с
+               // в SBASCorrectionStore (sbascorrectionstore.cpp:17).
                lt = sbas.getLongTermCorrection(sat, epoch);
 
                if (lt) {
-                  const rinex::NAV_RECORD* navForLtGate = nullptr;
-
-                  if (navRecsGlo && lt->recvTime.isValid()) {
-                     auto itGate = findNavEpochLE(*navRecsGlo, lt->recvTime);
-
-                     if (itGate != navRecsGlo->cend()) {
-                        auto itSatGate = itGate.value().constFind(sat);
-
-                        if (itSatGate != itGate.value().cend()) {
-                           navForLtGate = &itSatGate.value();
-                        }
-                     }
-                  }
-
-                  const bool gateOk = navForLtGate
-                                            ? passesGlonassLtApplicability(*navForLtGate, *lt)
-                                            : false;
-
-                  if (gateOk) {
-                     ++st.gloLtMatched;
-                  } else {
-                     ++st.gloLtMissed;
-                     lt.reset();
-                  }
+                  ++st.gloLtMatched;
                }
             }
 
@@ -872,12 +856,11 @@ void navsolver::ErrorCalculator::computeResidualErrors(pipeline::Context& ctx) {
             const double deltaSp3_m = orbitProj_m - clkTerm_m;
 
             // ========== SBAS коррекции ==========
-            const bool hasFast    = prc.has_value();
-            const bool hasLt      = lt.has_value();
-            const bool hasAnySbas = hasFast || hasLt;
-            // const double   prc_m      = hasFast ? *prc : 0.0;
-            const double   prc_m    = hasFast ? -(*prc) : 0.0;
-            const SbasMode sbasMode = detectSbasMode(hasFast, hasLt);
+            const bool     hasFast    = prc.has_value();
+            const bool     hasLt      = lt.has_value();
+            const bool     hasAnySbas = hasFast || hasLt;
+            const double   prc_m      = hasFast ? (*prc) : 0.0;
+            const SbasMode sbasMode   = detectSbasMode(hasFast, hasLt);
 
             if (hasFast && hasLt) {
                ++st.satsFastLt;
@@ -912,8 +895,7 @@ void navsolver::ErrorCalculator::computeResidualErrors(pipeline::Context& ctx) {
                      const double rrc      = (fp->current.prc_m - fp->previous.prc_m) / dt_fast;
                      const double dt_apply = fp->current.recvTime.secsTo(epoch);
 
-                     // rrc_m = rrc * dt_apply;
-                     rrc_m = 0.0;
+                     rrc_m = rrc * dt_apply;
                   }
                }
             }
@@ -1144,44 +1126,16 @@ double navsolver::ErrorCalculator::computeBroadcastClockL1_GLO(const rinex::R_TI
           0.5 * tr.svClockDriftRate * dt * dt;
 }
 
-double navsolver::ErrorCalculator::computeBroadcastClockL1_GPS(const rinex::NAV_RECORD& navRec, const QDateTime& epoch) {
-   const auto& tr = navRec.clock;
-
+double navsolver::ErrorCalculator::computeBroadcastClockL1_GPS(const rinex::NAV_RECORD& navRec,
+                                                               const QDateTime&         epoch) {
+   const auto&  tr  = navRec.clock;
    const double toc = secondsOfWeekUtc(tr.epoch);
    const double tow = secondsOfWeekUtc(epoch);
    const double dt  = wrapWeek(tow - toc);
 
-   const double clkL1 =
-      tr.svClockBias +
-      tr.svClockDrift     * dt +
-      tr.svClockDriftRate * dt * dt;
+   const double clkL1 = tr.svClockBias + tr.svClockDrift * dt + tr.svClockDriftRate * dt * dt;
 
-   // IS-GPS-200: Δt_sv = af0 + af1·dt + af2·dt² + Δt_rel − TGD
-   //   Δt_rel = F · e · sqrt(A) · sin(Ek),  F = −2·sqrt(mu)/c² = −4.442807633e-10 с/sqrt(м)
-   //   Ek — эксцентрическая аномалия на epoch (решение уравнения Кеплера Ek = Mk + e·sin Ek).
-   // Раньше член отсутствовал → clkNavL1 завышен до ±13 м (через e·sin Ek), что раздувало clkTerm.
-   constexpr double kMu = 3.986005e14;                              // м³/с² (GPS / WGS-84)
-   constexpr double kF  = -4.442807633e-10;                         // с/sqrt(м)
-
-   const double A  = navRec.sqrt_A * navRec.sqrt_A;                 // A = (sqrt_A)²
-   const double tk = wrapWeek(tow - navRec.Toe);                    // время от опорного момента эфемерид
-   const double n  = std::sqrt(kMu / (A * A * A)) + navRec.delta_n; // n = n0 + Δn
-   const double Mk = navRec.M0 + n * tk;                            // средняя аномалия
-
-   double Ek = Mk;                                                  // Kepler: Ek = Mk + e·sin Ek
-
-   for (int i = 0; i < 15; ++i) {
-      const double prev = Ek;
-      Ek = Mk + navRec.e * std::sin(Ek);
-
-      if (std::abs(Ek - prev) < 1e-12) {
-         break;
-      }
-   }
-
-   const double dt_rel = kF * navRec.e * navRec.sqrt_A * std::sin(Ek);
-
-   return clkL1 + dt_rel - navRec.TGD;
+   return clkL1 - navRec.TGD;
 }
 
 double navsolver::ErrorCalculator::computeBroadcastClockL1(const Satellite&         sat,

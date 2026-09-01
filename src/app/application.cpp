@@ -20,10 +20,16 @@ bool Application::initialize(const ApplicationConfig& config) {
       io::SourceType::FILE_CSV,
       cfg_.dcbPath,
       cfg_.antexPath,
-      cfg_.satMetadataPath
+      cfg_.constGpsPath,
+      cfg_.constGloPath,
+      cfg_.constSvnMapPath
    };
 
    navsolver::NavigationTaskSolver::Config navSolverCfg{};
+   navSolverCfg.weightCfg.sigmaReceiver_m = 0.75;
+   navSolverCfg.weightCfg.multipathA_m    = 0.0;
+   navSolverCfg.weightCfg.multipathB_m    = 0.0;
+   navSolverCfg.weightCfg.requireGive     = false;
 
    modules_.clear();
 

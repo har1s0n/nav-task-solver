@@ -14,7 +14,9 @@ int main(int argc, char* argv[]) {
    config.sbasPath            = "/Users/tarasovevgenij/Documents/2026_sisnet/2026-04-09/2026-04-09_backup_sisnet.csv";
    config.dcbPath             = "/Users/tarasovevgenij/Documents/2026_sisnet/2026-04-09/IPG_20260990000_01D_01D_DCB.BSX";
    config.antexPath           = "/Users/tarasovevgenij/Documents/2026_sisnet/2026-04-09/igs20.atx";
-   config.satMetadataPath     = "/Users/tarasovevgenij/Documents/2026_sisnet/2026-04-09/igs_satellite_metadata.snx";
+   config.constGpsPath        = "/Users/tarasovevgenij/qt-projects/nav-task-solver/docs/2026_sisnet/2026-04-09/Const_260730.gps";
+   config.constGloPath        = "/Users/tarasovevgenij/qt-projects/nav-task-solver/docs/2026_sisnet/2026-04-09/Const_260730.glo";
+   config.constSvnMapPath     = "/Users/tarasovevgenij/qt-projects/nav-task-solver/docs/2026_sisnet/2026-04-09/svn_map.txt";
 
    Application navApp;
 
